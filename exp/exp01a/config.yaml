@@ -1,0 +1,17 @@
+experiment:
+  name: exp01a
+  motivation: Run a RoboTwin oracle smoke test on xdlab23
+
+runtime:
+  host: xdlab23_yang
+  remote_root: /data1/ybyang/robotwin-capx
+  robotwin_root: ../RoboTwin
+  python: /data1/ybyang/envs/robotwin-capx/bin/python
+  gpu: 5
+
+robotwin:
+  task: stack_blocks_two
+  task_config: demo_clean
+  embodiment: aloha-agilex
+  seed: 0
+  trials: 1
