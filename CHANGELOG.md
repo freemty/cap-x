@@ -15,6 +15,9 @@
 
 - Separated agent finish decisions, motion-planner success, and simulator task
   success in trial and viewer results.
+- Let the RoboTwin batch runner accept an explicit actual simulator seed and
+  task-config name, and keep seed-specific generated configs and outputs
+  separate.
 - Expanded the PhysicalAgent comparison to distinguish the legacy privileged
   oracle from the `dev-local-bringup` file-handoff runtime and to define a
   reproducible cross-system benchmark boundary.

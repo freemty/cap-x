@@ -159,7 +159,13 @@ def _configured_tasks(config: dict[str, Any], tasks: list[TaskSpec]) -> list[Tas
     return [by_name[name] for name in selected_names]
 
 
-def _task_config(task: TaskSpec, output_dir: Path) -> dict[str, Any]:
+def _task_config(
+    task: TaskSpec,
+    output_dir: Path,
+    *,
+    seed: int | None = None,
+    robotwin_task_config: str = "demo_clean",
+) -> dict[str, Any]:
     if task.benchmark == "libero":
         return {
             "env": {
@@ -204,10 +210,11 @@ def _task_config(task: TaskSpec, output_dir: Path) -> dict[str, Any]:
                     "_target_": "capx.envs.simulators.robotwin.RoboTwinEnv",
                     "robotwin_root": None,
                     "task_name": task.task,
-                    "task_config": "demo_clean",
+                    "task_config": robotwin_task_config,
                     "embodiment": "aloha-agilex",
                     "privileged": True,
                     "max_steps": 128,
+                    "seed": seed,
                     "video_stride": 8,
                 },
                 "privileged": True,
@@ -281,17 +288,37 @@ def _refresh_analysis(config: dict[str, Any], config_path: str) -> None:
     print("  frontend manifest refreshed", flush=True)
 
 
-def _run_task(config: dict[str, Any], task: TaskSpec, *, dry_run: bool) -> dict[str, Any]:
+def _run_task(
+    config: dict[str, Any],
+    task: TaskSpec,
+    *,
+    dry_run: bool,
+    seed: int | None = None,
+    robotwin_task_config: str = "demo_clean",
+) -> dict[str, Any]:
     protocol = config["protocol"]
     task_parts = [task.benchmark]
     if task.suite:
         task_parts.append(task.suite)
     task_parts.append(f"{task.task_id:03d}_{_safe_name(task.task)}" if task.task_id is not None else task.task)
+    if seed is not None:
+        task_parts.append(f"seed_{seed}")
     output_base = REPO_ROOT / config["outputs"]["root"] / Path(*task_parts)
     config_dir = REPO_ROOT / config["outputs"]["root"] / "configs" / task.benchmark
     config_dir.mkdir(parents=True, exist_ok=True)
-    generated_config_path = config_dir / f"{_safe_name(task.key)}.yaml"
-    generated_config_path.write_text(yaml.safe_dump(_task_config(task, output_base / "run"), sort_keys=False))
+    seed_suffix = "" if seed is None else f"-s{seed}"
+    generated_config_path = config_dir / f"{_safe_name(task.key)}{seed_suffix}.yaml"
+    generated_config_path.write_text(
+        yaml.safe_dump(
+            _task_config(
+                task,
+                output_base / "run",
+                seed=seed,
+                robotwin_task_config=robotwin_task_config,
+            ),
+            sort_keys=False,
+        )
+    )
 
     python = config["runtime"][f"{task.benchmark}_python"]
     command = [
@@ -345,7 +372,7 @@ def _run_task(config: dict[str, Any], task: TaskSpec, *, dry_run: bool) -> dict[
         "model": protocol["model"],
         "oracle": False,
         "trial": 1,
-        "seed": 1,
+        "seed": 0 if seed is None else seed,
         "status": "complete" if summary_path.is_file() else "infra_error",
         "returncode": result.returncode,
         "wall_seconds": time.monotonic() - started,
@@ -363,6 +390,16 @@ def main(default_config: str = "exp/exp00a/config.yaml") -> None:
     parser.add_argument("--benchmark", choices=("all", "libero", "robotwin"), default="all")
     parser.add_argument("--task-key", help="Run only one exact task key")
     parser.add_argument("--limit", type=int, help="Run only the first N selected tasks")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Actual simulator seed. RoboTwin receives this value directly.",
+    )
+    parser.add_argument(
+        "--robotwin-task-config",
+        default="demo_clean",
+        help="RoboTwin task configuration name (for example demo_randomized).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--list-only", action="store_true")
@@ -397,7 +434,13 @@ def main(default_config: str = "exp/exp00a/config.yaml") -> None:
 
     for index, task in enumerate(selected, start=1):
         print(f"[{index}/{len(selected)}] {task.key}", flush=True)
-        row = _run_task(copy.deepcopy(config), task, dry_run=args.dry_run)
+        row = _run_task(
+            copy.deepcopy(config),
+            task,
+            dry_run=args.dry_run,
+            seed=args.seed,
+            robotwin_task_config=args.robotwin_task_config,
+        )
         if args.dry_run:
             print(" ".join(row["command"]))
             continue

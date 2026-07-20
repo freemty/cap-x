@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from exp.exp00a.run import TaskSpec, _configured_tasks, _refresh_analysis
+from exp.exp00a.run import TaskSpec, _configured_tasks, _refresh_analysis, _task_config
 from exp.exp00b.analyze import build_manifest
 from viewer.app import create_app
 
@@ -43,6 +43,20 @@ def test_exp00b_selection_is_explicit_and_ordered() -> None:
 
     assert [task.task for task in selected] == TASKS
     assert all(task.benchmark == "robotwin" for task in selected)
+
+
+def test_robotwin_task_config_forwards_explicit_seed(tmp_path: Path) -> None:
+    task = TaskSpec(benchmark="robotwin", task="click_bell")
+
+    config = _task_config(
+        task,
+        tmp_path / "run",
+        seed=100000,
+        robotwin_task_config="demo_randomized",
+    )
+
+    assert config["env"]["cfg"]["low_level"]["seed"] == 100000
+    assert config["env"]["cfg"]["low_level"]["task_config"] == "demo_randomized"
 
 
 def test_exp00b_refreshes_frontend_manifest_after_ledger_update(monkeypatch) -> None:
