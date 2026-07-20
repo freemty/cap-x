@@ -1,9 +1,58 @@
-# PhysicalAgent versus CaP-X
+# PhysicalAgent, CaP-X, and Guava
 
-This audit compares `freemty/PhysicalAgent` at
-`2f6bfc424524e06e4fcb0d171c8cfbc8b6a475f0` with CaP-X and the exp01b
-RoboTwin adapter. PhysicalAgent is a private, rapidly changing evaluation
-workspace, so all claims below are commit-specific.
+This audit has two commit-pinned PhysicalAgent scopes:
+
+- the older `freemty/PhysicalAgent` snapshot at
+  `2f6bfc424524e06e4fcb0d171c8cfbc8b6a475f0`, used below to audit the
+  privileged `play_once()` oracle and learned-policy clients; and
+- the current default comparison target,
+  `cherubicXN/PhysicalAgent:dev-local-bringup` at
+  `e57e677584abf529e7cbef18b989eb98eb55cd6d`, used to audit the file-handoff
+  planner runtime.
+
+The comparison also covers CaP-X's exp01b RoboTwin adapter and uses Guava arXiv
+`2606.18363v1` for the harness-level comparison. PhysicalAgent is a private,
+rapidly changing evaluation workspace, so all claims are commit-specific;
+never identify an experiment only by the branch name.
+
+The audited PhysicalAgent commit contains no file, class, or symbol named
+`RAPPLE`. In this document, "the no-VLA route" refers specifically to the
+`play_once()` + `Base_Task` oracle primitives + motion-planner stack.
+
+## Current default: `dev-local-bringup`
+
+The current branch is not the legacy no-VLA oracle route. It is a closed-loop
+planner harness in which a general multimodal agent reads three live RGB views,
+current absolute end-effector/gripper state, task text, and optional RGB-D
+pixel-query results, then writes one absolute Cartesian target to
+`action.json`. RoboTwin's CuRobo/MPLib layer plans and executes that target,
+and the agent receives a fresh observation before the next primitive.
+
+Its strict protocol explicitly prohibits simulator object-pose queries and
+task-source reads. Ground-truth object pose is therefore not part of the
+planner-facing interface at the audited commit. The runtime does know the
+robot's own end-effector and gripper state, uses calibrated depth/intrinsics/
+extrinsics to backproject requested pixels, and relies on mandatory expert
+demonstrations plus persistent global/task memory. Those are strong forms of
+scaffolding, but they are different from GT object pose leakage and must be
+reported separately.
+
+Relative to CaP-X, both systems use a foundation-model planner over explicit
+robot tools and a classical motion planner. Their central difference is the
+online policy representation:
+
+| `dev-local-bringup` | CaP-X |
+|---|---|
+| One constrained JSON primitive per model turn | An executable Python program per model turn |
+| Fresh observation after every primitive | A program may compose many primitives before another observation |
+| Pixel-query RGB-D localization | Modular perception/geometric APIs selected by the environment tier |
+| Mandatory demonstrations and persistent task/global memory | Demonstrations and memory are experiment choices, not runtime invariants |
+| No task source or raw simulator handle in the declared planner contract | Current code-execution globals include `env`, so the fair track needs a restricted namespace |
+
+Thus `dev-local-bringup` is best treated as another point in the CaP-X harness
+design space: approximately CaP-X's modular tool setting with a constrained
+one-primitive REPL, mandatory demonstrations, and persistent memory. It is not
+an end-to-end VLA, but it is also not the privileged `play_once()` oracle.
 
 ## Verdict
 
@@ -12,6 +61,13 @@ a RoboTwin/SAPIEN runtime, imitation-learning baselines, and closed-loop policy
 evaluation clients. CaP-X should remain the owner of the common environment,
 reward, evaluation, result-viewer, and GRPO layers. The reusable portion of
 PhysicalAgent is its observation/action/embodiment/evaluation contract.
+
+PhysicalAgent's no-VLA `play_once()` route is a privileged scripted
+task-and-motion-planning oracle. That is a legitimate expert baseline,
+demonstration generator, and simulator/planner validation tool. It is not an
+end-to-end visual agent. Describing it as a general non-VLA autonomous agent,
+or comparing its success rate directly with an RGB-D-conditioned VLA without
+labeling the privilege difference, would be benchmark leakage.
 
 The two policy families should coexist behind separate adapters:
 
@@ -122,6 +178,125 @@ not prevent a custom adapter from reading task actors or calling oracle
 methods. This is a capability leak even when existing baselines do not exploit
 it.
 
+## How the no-VLA oracle replaces a learned policy
+
+The no-VLA route does not replace the VLA with another online model. It moves
+the missing intelligence into three human-authored layers:
+
+1. **Asset annotations.** `model_data*.json` stores object-local contact and
+   functional frames. At runtime, the exact SAPIEN actor pose transforms these
+   frames into world coordinates:
+
+   ```text
+   T_world_point = T_world_actor @ T_actor_point
+   ```
+
+   There is no RGB-D object identification or pose estimation on this oracle
+   path.
+2. **Generic geometric macros.** `grasp_actor()` selects a reachable annotated
+   contact frame and expands it into pre-grasp, grasp, and gripper-close
+   actions. `place_actor()` preserves the held-object/gripper transform and
+   aligns an object functional frame with a target functional frame before
+   opening the gripper.
+3. **Task-specific programs.** Each task's `play_once()` decides which actor to
+   manipulate, which arm and functional-point IDs to use, the operation order,
+   and any task-specific offsets. `stack_blocks_two`, for example, chooses the
+   arm from the exact block position, grasps and lifts the block, queries the
+   preceding block's functional point, and calls `place_actor()` to align the
+   frames.
+
+The geometric intermediate representation contains only
+`Action(move, 7D_pose)` and `Action(gripper, value)`. MPLib or CuRobo converts
+move actions into joint trajectories, and SAPIEN drive targets execute those
+trajectories. The optional `code_gen/` path can use an LLM offline to synthesize
+`play_once()`, but it receives actor variables and functional-point guidance;
+the resulting runtime remains a privileged program rather than an online
+visual policy.
+
+## Three-way tool-abstraction comparison
+
+The important distinction is not just whether a function is called
+`grasp`. It is the epistemic contract of its arguments and the work hidden
+behind the call.
+
+| Dimension | CaP-X | Guava | PhysicalAgent no-VLA oracle |
+|---|---|---|---|
+| Object reference | A semantic string such as `"red cube"`; S2 uses visual grounding while S1 may use privileged state | A semantic string grounded from RGB-D with SAM3 | A direct simulator `Actor` handle with exact pose |
+| Grasp tool | `sample_grasp_pose(name)` returns a pose; generated code still composes open, move, close, and lift | `grasp(object)` performs segmentation, grasp planning, approach, close, and reports gripper outcome | `grasp_actor(actor)` expands annotated contact frames into pre-grasp, grasp, and close actions |
+| Grasp source | SAM3/Molmo, point clouds, Contact-GraspNet, and frame transforms in the non-privileged path | SAM3 plus a learned 6-DoF grasp planner or PCA top-down baseline | Hand-annotated contact frames plus exact simulator state |
+| Placement/alignment | Generated code generally computes the target pose, offsets, and sequence | `align(object, direction, clearance)` exposes categorical relative geometry | `place_actor()` performs functional-frame-to-functional-frame SE(3) alignment |
+| Task decomposition | A coding agent writes a Python program with branches, loops, and multiple primitive calls | A VLM selects one tool per ReAct step and replans from new observations | A human or offline code generator writes the fixed `play_once()` program |
+| Lower layer | Can expose segmentation, point clouds, grasp candidates, transforms, IK, and joint movement | The low-level ablation exposes a fused absolute Cartesian pose and gripper width | Internal `Action(SE3/gripper)` is lowered through a motion planner and dense controller |
+| Online recovery | Single-turn execution or multi-turn code regeneration and visual feedback | Fresh perception-reasoning-action loop after each tool | No semantic recovery unless explicitly programmed; planner failure and the final task predicate remain available |
+| Dominant prior | Human API design plus the coding model's composition ability | Human semantic-skill design plus the VLM's tool selection | Asset annotations, exact state, task program, and planner |
+
+This produces different orderings along different axes:
+
+- Guava has the most semantically complete `grasp()` call.
+- CaP-X gives the coding agent the greatest freedom to compose and inspect
+  intermediate perception and geometry.
+- PhysicalAgent has the strongest functional-frame placement abstraction, but
+  only because those frames and object identities are provided as privileged
+  inputs.
+
+## What the abstraction studies do and do not establish
+
+CaP-X makes abstraction level an explicit benchmark axis. Its high-level S1/S2
+tiers collapse perception, geometric reasoning, and control behind
+human-designed helpers, while S3/S4 expose the constituent perception and
+control modules. The reported conclusion is a trade-off: higher abstraction
+raises task success by reducing the program search space, but imposes a
+generality and expressivity ceiling.
+
+Guava directly compares its semantic tool set with a four-tool geometric
+interface consisting of absolute Cartesian pose plus gripper width, object
+position/size queries, and home pose. The aggregate harness ablation favors the
+semantic interface (`41%` versus `29%`), but the result is not task-universal:
+the reported push task favors the lower-level interface (`47%` versus `20%`).
+Guava therefore supports the claim that semantic tools help overall, not that
+maximal abstraction is always optimal.
+
+PhysicalAgent does not contain a matched abstraction-level ablation. Its
+privileged expert and learned-policy paths change observation privilege, object
+representation, task decomposition, action space, and planner assistance at
+the same time. Their success rates cannot isolate the causal effect of tool
+abstraction.
+
+## When the no-VLA route is and is not a fair baseline
+
+The privileged route is valid when it is labeled and used as one of the
+following:
+
+- a scripted expert or oracle upper bound;
+- a demonstration generator for behavior cloning;
+- a simulator, asset, controller, or motion-planner validation test;
+- an explicitly conditional `P(policy success | oracle success)` protocol,
+  reported alongside unconditional success.
+
+It becomes an invalid comparison when a result:
+
+- describes `play_once()` as a visual or general autonomous agent;
+- compares it directly with an RGB-D-conditioned VLA under one undifferentiated
+  success-rate column;
+- hides actor handles, exact poses, contact/functional frames, or task-specific
+  scripts from the privilege declaration;
+- filters evaluation seeds through the expert without reporting the requested
+  and accepted denominators.
+
+A fair three-track abstraction study should keep the simulator seeds, motion
+planner, controller, and `check_success()` predicate fixed while varying only
+the agent-facing interface:
+
+1. **PhysicalAgent-Oracle:** actor handles plus contact/functional frames.
+2. **Guava-Semantic:** RGB-D plus semantic `grasp` and `align` tools.
+3. **CaP-X-Modular:** RGB-D plus segmentation, grasp, transform, IK, and motion
+   primitives.
+
+Report grounding, grasp generation, motion planning, execution, and terminal
+task success separately. Also report the manual annotation budget for object
+frames and task-specific `play_once()` programs; otherwise human-provided task
+knowledge is silently counted as agent capability.
+
 ## What `grasp_actor()` really does
 
 `Base_Task.grasp_actor(actor, arm_tag, pre_grasp_dis, grasp_dis,
@@ -215,7 +390,7 @@ A fair non-privileged track should enforce the following contract:
 7. Add negative tests proving that an unprivileged policy cannot obtain actor
    poses, contact frames, oracle actions, or the low-level environment object.
 
-## What PhysicalAgent does not currently provide
+## What the legacy `2f6bfc4` snapshot does not provide
 
 - No PPO/GRPO loop, advantage estimate, critic, online learner, or RL
   checkpoint. The committed trainers are imitation-learning objectives.
@@ -277,3 +452,107 @@ Before RoboTwin GRPO, two additional CaP-X changes are required:
 - keep code-execution success, planner success, and task success as distinct
   metrics. Existing reward shaping and `TrialSummary.success` cannot be used as
   aliases for benchmark task success.
+
+## Repository maintenance for a PhysicalAgent versus CaP-X benchmark
+
+CaP-X should own the benchmark control plane, while PhysicalAgent remains an
+external, commit-pinned system under test. Do not copy PhysicalAgent into this
+repository or add the private repository as a public submodule: either choice
+couples the public checkout to private, fast-moving code and obscures which
+system was actually evaluated. Use sibling checkouts discovered through
+`PHYSICAL_AGENT_ROOT` and `ROBOTWIN_ROOT`, and fail a launch when their commits
+do not match the run lock.
+
+Maintain two primary scoreboards and one diagnostic upper bound:
+
+1. **Native-system performance.** Each system keeps its intended advantages.
+   PhysicalAgent uses mandatory demonstrations, persistent memory, one JSON
+   primitive per turn, and fresh observations. CaP-X uses its native Python
+   code-policy interface and configured perception tools. This answers which
+   complete system works better, but not why.
+2. **Matched-interface performance.** Fix the task/seed manifest, simulator,
+   embodiment, camera fields, controller/motion planner, planner model,
+   demonstration and memory allowance, and resource budgets. Vary only the
+   policy representation: one-primitive JSON REPL versus restricted Python
+   composition over the same primitive library. This is the causal harness
+   comparison.
+3. **Privileged oracle upper bound.** Keep `play_once()` and actor/frame APIs in
+   a separate table. Never mix them into either primary aggregate.
+
+The reusable code and immutable experiment instances should be separated:
+
+```text
+capx/benchmarks/physicalagent_vs_capx/
+  contracts.py              # versioned observation/action/episode DTOs
+  runner.py                 # common episode and budget accounting
+  adapters/
+    capx.py                  # native and matched CaP-X policies
+    physicalagent.py         # external file-handoff process adapter
+  normalize.py              # extend capx.result.v1; do not invent a viewer fork
+  validate.py               # privilege, schema, and version-lock checks
+
+exp/<next-id>-pa-capx-*/
+  README.md                  # hypothesis, exact comparison, findings
+  config.yaml                # human-readable run configuration
+  versions.lock.yaml         # immutable repositories, assets, model, controller
+  seeds.jsonl                # requested seeds; never silently rewrite this file
+  results/manifest.json      # small normalized records tracked in Git
+```
+
+Large RGB-D traces, HDF5 demonstrations, and videos should live in artifact
+storage. Git tracks their URI, size, and checksum. Every run lock should record
+at least the CaP-X, PhysicalAgent, and RoboTwin commit SHAs; dirty-worktree
+status and diff hash; task config and embodiment; asset checksum; model ID and
+serving parameters; planner/controller configuration; and observation/action
+schema versions. Recording only `dev-local-bringup` is not reproducible.
+
+Extend the existing `capx.result.v1` manifest rather than creating a separate
+PhysicalAgent result format. Each episode needs:
+
+- requested seed, executed seed, skip status, and skip reason;
+- official task success, code/protocol validity, and motion-planner success as
+  different fields;
+- model calls, robot primitives, simulator steps, input/output tokens, wall
+  time, and estimated cost;
+- exact model-visible observation fields, controller privilege, action schema,
+  demo count, memory mode and memory snapshot hash;
+- a failure label from localization, invalid action/code, planning, grasp,
+  transport, release, predicate, timeout, or infrastructure.
+
+Agent turns alone are not a fair budget: one PhysicalAgent turn executes one
+primitive, while one CaP-X program can execute many. Set and report independent
+limits for model calls, robot primitives, simulator steps, tokens, and wall
+time, then plot success against primitive/token budgets. The primary success
+rate must cover all requested stable seeds. An oracle-solvable conditional
+rate may be reported only as an additional metric with both denominators.
+
+For the matched track, run the planner out of process with only a serialized
+observation DTO and action sink. The current CaP-X
+`CodeExecutionEnvBase._init_exec_globals()` exposes `env`, so
+`privileged=False` observation gating alone is insufficient. Remove the raw
+environment from this track and add negative tests proving that code cannot
+read task actors, simulator poses, task source, annotated functional frames,
+or the success predicate. Ground-truth success remains evaluator-side only.
+
+The minimum useful rollout sequence is:
+
+1. protocol smoke: three representative tasks, one fixed seed, both adapters;
+2. fairness smoke: the same tasks over ten fixed seeds, with privilege and
+   budget validation enabled;
+3. reportable run: the frozen task suite over at least 100 requested seeds per
+   setting, with bootstrap or Wilson confidence intervals;
+4. ablations for demos, persistent memory, one-versus-many primitives per
+   model call, RGB versus RGB-D, and semantic versus modular tools.
+
+CI should stay cheap: unit-test DTO round trips and action validation, verify
+every run lock and seed manifest, reject dirty/unpinned reportable launches,
+run one fixed-seed simulator smoke, validate `capx.result.v1`, and include a
+negative capability test for raw-environment access. Expensive benchmark runs
+remain explicit jobs whose artifacts are normalized by the same code.
+
+## Audited sources
+
+- [PhysicalAgent commit `2f6bfc4`](https://github.com/freemty/PhysicalAgent/tree/2f6bfc424524e06e4fcb0d171c8cfbc8b6a475f0)
+- [PhysicalAgent `dev-local-bringup` commit `e57e677`](https://github.com/cherubicXN/PhysicalAgent/tree/e57e677584abf529e7cbef18b989eb98eb55cd6d)
+- [CaP-X paper, arXiv:2603.22435](https://arxiv.org/abs/2603.22435)
+- [Guava paper, arXiv:2606.18363](https://arxiv.org/abs/2606.18363)
