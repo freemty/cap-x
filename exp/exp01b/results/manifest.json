@@ -1,0 +1,133 @@
+{
+  "runs": [
+    {
+      "artifact_root": "outputs/exp01b/oracle/libero",
+      "benchmark": "libero",
+      "config": {
+        "config_path": "env_configs/human_oracle_code/libero/franka_libero_object_swap_7_privileged_oracle_exp01b.yaml",
+        "embodiment": "franka",
+        "model": "oracle",
+        "suite": "libero_object_swap",
+        "task": "libero_object_swap[7]",
+        "task_id": 7
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp01b/oracle/libero/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/code.py",
+            "responses": "outputs/exp01b/oracle/libero/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/all_responses.json",
+            "summary": "outputs/exp01b/oracle/libero/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp01b/oracle/libero/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 42.33,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 1.0,
+            "sandbox_rc": 0,
+            "task_success": true
+          },
+          "seed": null,
+          "status": "complete",
+          "task": "libero_object_swap[7]",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp01b",
+      "finished_at": "2026-07-18T06:57:35+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 42.33,
+        "mean_reward": 1.0,
+        "plan_success_rate": null,
+        "task_success_rate": 1.0
+      },
+      "policy": "capx-oracle",
+      "run_id": "exp01b-libero-oracle-1ac554db9a",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp01b/oracle/libero",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-18T06:57:35+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp01b/oracle/robotwin",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "env_configs/robotwin/stack_blocks_two_privileged_oracle.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "oracle",
+        "suite": null,
+        "task": "stack_blocks_two",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp01b/oracle/robotwin/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/code.py",
+            "responses": "outputs/exp01b/oracle/robotwin/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/all_responses.json",
+            "summary": "outputs/exp01b/oracle/robotwin/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp01b/oracle/robotwin/trial_01_sandboxrc_0_reward_1.000_taskcompleted_1/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 77.28,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": true,
+            "reward": 1.0,
+            "sandbox_rc": 0,
+            "task_success": true
+          },
+          "seed": null,
+          "status": "complete",
+          "task": "stack_blocks_two",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp01b",
+      "finished_at": "2026-07-18T06:38:53+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 77.28,
+        "mean_reward": 1.0,
+        "plan_success_rate": 1.0,
+        "task_success_rate": 1.0
+      },
+      "policy": "capx-oracle",
+      "run_id": "exp01b-robotwin-oracle-19a567cc50",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp01b/oracle/robotwin",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-18T06:38:53+00:00"
+    }
+  ],
+  "schema": "capx.result.v1"
+}

@@ -1,0 +1,32 @@
+experiment:
+  name: exp01b
+  motivation: Run CaP-X on RoboTwin and LIBERO with a unified replay viewer
+
+runtime:
+  host: xdlab23_yang
+  remote_root: /data1/ybyang/robotwin-capx/cap-x-dual
+  gpu: 5
+  robotwin_root: /data1/ybyang/robotwin-capx/RoboTwin
+  robotwin_python: /data1/ybyang/envs/robotwin-capx/bin/python
+  libero_python: /data1/ybyang/envs/capx-libero/bin/python
+  robot_descriptions_cache: /data1/ybyang/robotwin-capx/robot-descriptions
+  robot_description_commit: 3fed73700f2201906eb67c5c922d0f476c667c00
+
+benchmarks:
+  robotwin:
+    config: env_configs/robotwin/stack_blocks_two_privileged_oracle.yaml
+    output_dir: outputs/exp01b/robotwin
+  libero:
+    config: env_configs/human_oracle_code/libero/franka_libero_object_swap_7_privileged_oracle_exp01b.yaml
+    output_dir: outputs/exp01b/libero
+
+model_smoke:
+  model: Qwen/Qwen3-4B
+  server_url: http://127.0.0.1:8110/v1/chat/completions
+  model_path: /data1/ybyang/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c
+  python: /data1/ybyang/vllm-env/bin/python
+  gpu: 3
+
+viewer:
+  host: 0.0.0.0
+  port: 8891

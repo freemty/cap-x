@@ -1,129 +1,71 @@
+"""Dependency-light API registry.
+
+Simulator stacks in CaP-X are intentionally heterogeneous.  Importing every
+Franka, LIBERO, and R1Pro dependency just to construct a RoboTwin API made the
+registry itself a cross-embodiment dependency bottleneck.  Registry entries are
+therefore lazy: the concrete module is imported only when that API is selected.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any, Callable
+
 from .base_api import list_apis, register_api
-from .franka.control import FrankaControlApi
-from .franka.control_privileged import FrankaControlPrivilegedApi
-from .franka.control_reduced import FrankaControlApiReduced
-from .franka.control_reduced_skill_library import FrankaControlApiReducedSkillLibrary
-from .franka.control_reduced_exampleless import FrankaControlApiReducedExampleless
-from .franka.nut_assembly_privileged import FrankaControlNutAssemblyPrivilegedApi
-from .franka.nut_assembly_visual import FrankaControlNutAssemblyVisualApi
-from .franka.spill_wipe import FrankaControlSpillWipeApi
-from .franka.spill_wipe_privileged import FrankaControlSpillWipePrivilegedApi
-from .franka.handover_privileged import FrankaHandoverPrivilegedApi
-from .franka.handover import FrankaHandoverApi
-from .franka.handover_reduced import FrankaHandoverApiReduced
-from .franka.handover_reduced_exampleless import FrankaHandoverApiReducedExampleless
-from .franka.two_arm_lift import FrankaTwoArmLiftApi
-from .franka.two_arm_lift_privileged import FrankaTwoArmLiftPrivilegedApi
-try:
-    from .franka.libero import FrankaLiberoApi
-    from .franka.libero_privileged import FrankaLiberoPrivilegedApi
-    from .franka.libero_reduced import FrankaLiberoApiReduced
-    from .franka.libero_reduced_skill_library import FrankaLiberoApiReducedSkillLibrary
-    _libero_available = True
-except ImportError:
-    _libero_available = False
-    print("LIBERO not installed, skipping LIBERO APIs")
 
-register_api("FrankaControlPrivilegedApi", FrankaControlPrivilegedApi)
-register_api("FrankaControlApi", lambda env: FrankaControlApi(env, use_sam3=True))
-register_api("FrankaControlApiReduced", FrankaControlApiReduced)
-register_api(
-    "FrankaControlApiReducedBimanual", lambda env: FrankaControlApiReduced(env, bimanual=True)
-)
-register_api(
-    "FrankaControlApiReducedExamplelessBimanual", lambda env: FrankaControlApiReducedExampleless(env, bimanual=True)
-)
-register_api(
-    "FrankaControlApiReducedBimanualHandover", lambda env: FrankaControlApiReduced(env, bimanual=True, is_handover=True)
-)
-register_api(
-    "FrankaControlApiReducedExamplelessBimanualHandover", lambda env: FrankaControlApiReducedExampleless(env, bimanual=True, is_handover=True)
-)
-register_api(
-    "FrankaControlApiReducedSpillWipe",
-    lambda env: FrankaControlApiReduced(env, tcp_offset=[0.0, 0.0, -0.0158]),
-)
-register_api("FrankaControlApiReducedExampleless", FrankaControlApiReducedExampleless)
 
-register_api("FrankaControlApiReducedSkillLibrary", FrankaControlApiReducedSkillLibrary)
-register_api(
-    "FrankaControlApiReducedSkillLibraryBimanual",
-    lambda env: FrankaControlApiReducedSkillLibrary(env, bimanual=True),
-)
-register_api(
-    "FrankaControlApiReducedSkillLibrarySpillWipe",
-    lambda env: FrankaControlApiReducedSkillLibrary(env, tcp_offset=[0.0, 0.0, -0.0158]),
-)
-register_api(
-    "FrankaControlApiReducedSkillLibraryBimanualHandover",
-    lambda env: FrankaControlApiReducedSkillLibrary(env, bimanual=True, is_handover=True)
-)
+def _lazy_api(module: str, class_name: str, **kwargs: Any) -> Callable[[Any], Any]:
+    def factory(env: Any) -> Any:
+        api_class = getattr(import_module(module, package=__name__), class_name)
+        return api_class(env, **kwargs)
 
-# For spill wipe environment, we use a custom tcp offset of -0.0158m since panda end effector has been modified by robosuite to have the sponge attachement
-register_api(
-    "FrankaControlSpillWipeApi",
-    lambda env: FrankaControlSpillWipeApi(env, tcp_offset=[0.0, 0.0, -0.0158], use_sam3=True),
-)
-register_api(
-    "FrankaControlSpillWipeApiReduced",
-    lambda env: FrankaControlApiReduced(
-        env, tcp_offset=[0.0, 0.0, -0.0158], is_spill_wipe=True
-    ),
-)
-register_api(
-    "FrankaControlSpillWipePrivilegedApi",
-    lambda env: FrankaControlSpillWipePrivilegedApi(env, tcp_offset=[0.0, 0.0, -0.0158]),
-)
-register_api(
-    "FrankaControlSpillWipeApiReducedExampleless",
-    lambda env: FrankaControlApiReducedExampleless(
-        env, tcp_offset=[0.0, 0.0, -0.0158], is_spill_wipe=True
-    ),
-)
+    factory.__name__ = f"lazy_{class_name}"
+    return factory
 
-register_api("FrankaHandoverPrivilegedApi", FrankaHandoverPrivilegedApi)
-register_api("FrankaHandoverApi", FrankaHandoverApi)
-register_api("FrankaHandoverApiReduced", FrankaHandoverApiReduced)
-register_api("FrankaHandoverApiReducedExampleless", FrankaHandoverApiReducedExampleless)
 
-register_api("FrankaTwoArmLiftApi", FrankaTwoArmLiftApi)
-register_api("FrankaTwoArmLiftPrivilegedApi", FrankaTwoArmLiftPrivilegedApi)
-register_api(
-    "FrankaTwoArmLiftApiReduced", 
-    lambda env: FrankaControlApiReduced(env, bimanual=True, use_sam3=False),
-)
-register_api(
-    "FrankaTwoArmLiftApiReducedExampleless",
-    lambda env: FrankaControlApiReducedExampleless(env, bimanual=True, use_sam3=False),
-)
+_API_SPECS: dict[str, tuple[str, str, dict[str, Any]]] = {
+    "FrankaControlPrivilegedApi": (".franka.control_privileged", "FrankaControlPrivilegedApi", {}),
+    "FrankaControlApi": (".franka.control", "FrankaControlApi", {"use_sam3": True}),
+    "FrankaControlApiReduced": (".franka.control_reduced", "FrankaControlApiReduced", {}),
+    "FrankaControlApiReducedBimanual": (".franka.control_reduced", "FrankaControlApiReduced", {"bimanual": True}),
+    "FrankaControlApiReducedExamplelessBimanual": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {"bimanual": True}),
+    "FrankaControlApiReducedBimanualHandover": (".franka.control_reduced", "FrankaControlApiReduced", {"bimanual": True, "is_handover": True}),
+    "FrankaControlApiReducedExamplelessBimanualHandover": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {"bimanual": True, "is_handover": True}),
+    "FrankaControlApiReducedSpillWipe": (".franka.control_reduced", "FrankaControlApiReduced", {"tcp_offset": [0.0, 0.0, -0.0158]}),
+    "FrankaControlApiReducedExampleless": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {}),
+    "FrankaControlApiReducedSkillLibrary": (".franka.control_reduced_skill_library", "FrankaControlApiReducedSkillLibrary", {}),
+    "FrankaControlApiReducedSkillLibraryBimanual": (".franka.control_reduced_skill_library", "FrankaControlApiReducedSkillLibrary", {"bimanual": True}),
+    "FrankaControlApiReducedSkillLibrarySpillWipe": (".franka.control_reduced_skill_library", "FrankaControlApiReducedSkillLibrary", {"tcp_offset": [0.0, 0.0, -0.0158]}),
+    "FrankaControlApiReducedSkillLibraryBimanualHandover": (".franka.control_reduced_skill_library", "FrankaControlApiReducedSkillLibrary", {"bimanual": True, "is_handover": True}),
+    "FrankaControlSpillWipeApi": (".franka.spill_wipe", "FrankaControlSpillWipeApi", {"tcp_offset": [0.0, 0.0, -0.0158], "use_sam3": True}),
+    "FrankaControlSpillWipeApiReduced": (".franka.control_reduced", "FrankaControlApiReduced", {"tcp_offset": [0.0, 0.0, -0.0158], "is_spill_wipe": True}),
+    "FrankaControlSpillWipePrivilegedApi": (".franka.spill_wipe_privileged", "FrankaControlSpillWipePrivilegedApi", {"tcp_offset": [0.0, 0.0, -0.0158]}),
+    "FrankaControlSpillWipeApiReducedExampleless": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {"tcp_offset": [0.0, 0.0, -0.0158], "is_spill_wipe": True}),
+    "FrankaHandoverPrivilegedApi": (".franka.handover_privileged", "FrankaHandoverPrivilegedApi", {}),
+    "FrankaHandoverApi": (".franka.handover", "FrankaHandoverApi", {}),
+    "FrankaHandoverApiReduced": (".franka.handover_reduced", "FrankaHandoverApiReduced", {}),
+    "FrankaHandoverApiReducedExampleless": (".franka.handover_reduced_exampleless", "FrankaHandoverApiReducedExampleless", {}),
+    "FrankaTwoArmLiftApi": (".franka.two_arm_lift", "FrankaTwoArmLiftApi", {}),
+    "FrankaTwoArmLiftPrivilegedApi": (".franka.two_arm_lift_privileged", "FrankaTwoArmLiftPrivilegedApi", {}),
+    "FrankaTwoArmLiftApiReduced": (".franka.control_reduced", "FrankaControlApiReduced", {"bimanual": True, "use_sam3": False}),
+    "FrankaTwoArmLiftApiReducedExampleless": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {"bimanual": True, "use_sam3": False}),
+    "FrankaControlNutAssemblyPrivilegedApi": (".franka.nut_assembly_privileged", "FrankaControlNutAssemblyPrivilegedApi", {}),
+    "FrankaControlNutAssemblyVisualApi": (".franka.nut_assembly_visual", "FrankaControlNutAssemblyVisualApi", {}),
+    "FrankaControlNutAssemblyApiReduced": (".franka.control_reduced", "FrankaControlApiReduced", {"is_peg_assembly": True}),
+    "FrankaControlNutAssemblyApiReducedExampleless": (".franka.control_reduced_exampleless", "FrankaControlApiReducedExampleless", {"is_peg_assembly": True}),
+    "FrankaControlMultiPrivilegedApi": (".franka.control_privileged", "FrankaControlPrivilegedApi", {"multi_turn": True}),
+    "FrankaRealReducedSkillLibraryControlApi": (".franka.control_reduced_skill_library", "FrankaControlApiReducedSkillLibrary", {"tcp_offset": [0.0, 0.0, -0.157], "real": True}),
+    "FrankaRealControlApi": (".franka.control", "FrankaControlApi", {"tcp_offset": [0.0, 0.0, -0.157], "real": True}),
+    "R1ProControlApi": (".r1pro.control", "R1ProControlApi", {"use_sam3": True}),
+    "FrankaLiberoPrivilegedApi": (".franka.libero_privileged", "FrankaLiberoPrivilegedApi", {}),
+    "FrankaLiberoApi": (".franka.libero", "FrankaLiberoApi", {"use_sam3": True}),
+    "FrankaLiberoApiReduced": (".franka.libero_reduced", "FrankaLiberoApiReduced", {}),
+    "FrankaLiberoApiReducedSkillLibrary": (".franka.libero_reduced_skill_library", "FrankaLiberoApiReducedSkillLibrary", {}),
+    "RoboTwinPrivilegedApi": (".robotwin", "RoboTwinPrivilegedApi", {}),
+}
 
-register_api("FrankaControlNutAssemblyPrivilegedApi", FrankaControlNutAssemblyPrivilegedApi)
-register_api("FrankaControlNutAssemblyVisualApi", FrankaControlNutAssemblyVisualApi)
-register_api(
-    "FrankaControlNutAssemblyApiReduced",
-    lambda env: FrankaControlApiReduced(env, is_peg_assembly=True),
-)
-register_api(
-    "FrankaControlNutAssemblyApiReducedExampleless",
-    lambda env: FrankaControlApiReducedExampleless(env, is_peg_assembly=True),
-)
-# Register multi-turn variant with multi_turn=True
-register_api(
-    "FrankaControlMultiPrivilegedApi",
-    lambda env: FrankaControlPrivilegedApi(env, multi_turn=True),
-)
+for _name, (_module, _class_name, _kwargs) in _API_SPECS.items():
+    register_api(_name, _lazy_api(_module, _class_name, **_kwargs))
 
-register_api("FrankaRealReducedSkillLibraryControlApi", lambda env: FrankaControlApiReducedSkillLibrary(env, tcp_offset=[0.0, 0.0, -0.157], real = True))
-register_api("FrankaRealControlApi", lambda env: FrankaControlApi(env, tcp_offset=[0.0, 0.0, -0.157], real = True))
 
-try:
-    from .r1pro.control import R1ProControlApi
-    register_api("R1ProControlApi", lambda env: R1ProControlApi(env, use_sam3=True))
-except ImportError:
-    print("R1Pro not installed, skipping R1Pro APIs")
-
-if _libero_available:
-    register_api("FrankaLiberoPrivilegedApi", FrankaLiberoPrivilegedApi)
-    register_api("FrankaLiberoApi", lambda env: FrankaLiberoApi(env, use_sam3=True))
-    register_api("FrankaLiberoApiReduced", FrankaLiberoApiReduced)
-    register_api("FrankaLiberoApiReducedSkillLibrary", FrankaLiberoApiReducedSkillLibrary)
+__all__ = ["list_apis", "register_api"]

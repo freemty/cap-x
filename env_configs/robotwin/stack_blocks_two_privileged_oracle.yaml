@@ -1,0 +1,57 @@
+# Usage:
+# ROBOTWIN_ROOT=/path/to/RoboTwin python capx/envs/launch.py \
+#   --config-path env_configs/robotwin/stack_blocks_two_privileged_oracle.yaml
+
+env:
+  _target_: capx.envs.tasks.robotwin.robotwin_env.RoboTwinCodeEnv
+  cfg:
+    _target_: capx.envs.tasks.base.CodeExecEnvConfig
+    apis:
+      - RoboTwinPrivilegedApi
+    low_level:
+      _target_: capx.envs.simulators.robotwin.RoboTwinEnv
+      robotwin_root: null
+      task_name: stack_blocks_two
+      task_config: demo_clean
+      embodiment: aloha-agilex
+      max_steps: 128
+      video_stride: 8
+    privileged: true
+    prompt: |
+      Stack block2 on top of block1. Use the planner-backed RoboTwin APIs.
+      Check every Boolean action result and stop if planning fails.
+    oracle_code: |
+      actors = ["block1", "block2"]
+      previous_arm = None
+      for index, actor in enumerate(actors):
+          arm = choose_arm(actor)
+          if previous_arm is not None and previous_arm != arm:
+              assert back_to_origin(previous_arm)
+
+          assert grasp_actor(actor, arm=arm, pre_grasp_dis=0.09)
+          assert move_by_displacement(arm, z=0.07)
+
+          if index == 0:
+              target_pose = [0.0, -0.13, 0.75, 0.0, 1.0, 0.0, 0.0]
+          else:
+              target_pose = get_functional_point("block1", 1)
+
+          assert place_actor(
+              actor,
+              target_pose,
+              arm=arm,
+              functional_point_id=0,
+              pre_dis=0.05,
+              dis=0.0,
+              pre_dis_axis="fp",
+          )
+          assert move_by_displacement(arm, z=0.07)
+          previous_arm = arm
+
+      RESULT = get_task_status()
+
+record_video: true
+output_dir: ./outputs/exp01b/robotwin
+use_oracle_code: true
+trials: 1
+num_workers: 1

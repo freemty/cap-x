@@ -1,0 +1,1165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="exp01b analysis: CaP-X integration on RoboTwin and LIBERO">
+  <title>exp01b — CaP-X dual-benchmark analysis</title>
+  <style>
+    :root {
+      --paper: #f6f6f4;
+      --panel: #ffffff;
+      --ink: #111111;
+      --muted: #626262;
+      --line: #c9c9c5;
+      --line-strong: #222222;
+      --soft: #ececea;
+      --slide-padding: clamp(1rem, 4vw, 4rem);
+      --content-gap: clamp(0.65rem, 2.2vh, 1.6rem);
+      --title-size: clamp(2rem, 6vw, 5.2rem);
+      --h2-size: clamp(1.45rem, 3.5vw, 3rem);
+      --h3-size: clamp(0.88rem, 1.45vw, 1.16rem);
+      --body-size: clamp(0.76rem, 1.35vw, 1.08rem);
+      --small-size: clamp(0.62rem, 0.95vw, 0.82rem);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow-x: hidden;
+    }
+
+    html {
+      scroll-snap-type: y mandatory;
+      scroll-behavior: auto;
+      background: var(--paper);
+    }
+
+    body {
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: var(--body-size);
+      line-height: 1.42;
+    }
+
+    button,
+    table {
+      font: inherit;
+    }
+
+    .slide {
+      position: relative;
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      scroll-snap-align: start;
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--paper);
+    }
+
+    .slide-content {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      justify-content: center;
+      gap: var(--content-gap);
+      width: min(100%, 1180px);
+      max-height: 100%;
+      margin: 0 auto;
+      padding: var(--slide-padding);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: clamp(0.5rem, 1.2vh, 0.9rem);
+      border-bottom: 2px solid var(--line-strong);
+    }
+
+    .kicker,
+    .slide-index,
+    .label,
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0.03em;
+    }
+
+    .kicker {
+      color: var(--muted);
+      font-size: var(--small-size);
+      text-transform: uppercase;
+    }
+
+    .slide-index {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    h1 {
+      max-width: 12ch;
+      font-size: var(--title-size);
+      font-weight: 680;
+      letter-spacing: -0.055em;
+      line-height: 0.96;
+    }
+
+    h2 {
+      font-size: var(--h2-size);
+      font-weight: 660;
+      letter-spacing: -0.035em;
+      line-height: 1.02;
+    }
+
+    h3 {
+      font-size: var(--h3-size);
+      font-weight: 700;
+      line-height: 1.22;
+    }
+
+    p,
+    li,
+    td,
+    th {
+      font-size: var(--body-size);
+    }
+
+    .lead {
+      max-width: 62ch;
+      color: var(--muted);
+      font-size: clamp(0.95rem, 1.75vw, 1.32rem);
+      line-height: 1.4;
+    }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: clamp(0.65rem, 1.5vw, 1rem);
+      align-items: stretch;
+      max-width: 900px;
+      margin-top: clamp(0.25rem, 1vh, 0.8rem);
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    .verdict strong {
+      display: grid;
+      place-items: center;
+      min-width: clamp(5rem, 10vw, 8rem);
+      padding: clamp(0.65rem, 1.4vw, 1rem);
+      color: #ffffff;
+      background: var(--ink);
+      font-size: clamp(0.72rem, 1vw, 0.9rem);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .verdict span {
+      align-self: center;
+      padding: clamp(0.65rem, 1.4vw, 1rem) clamp(0.4rem, 1.2vw, 0.8rem);
+      font-size: clamp(0.82rem, 1.35vw, 1.08rem);
+    }
+
+    .stamp-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: 0.2rem;
+    }
+
+    .stamp {
+      padding: 0.24rem 0.52rem;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .result-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.34fr);
+      gap: clamp(0.7rem, 2vw, 1.4rem);
+      min-height: 0;
+    }
+
+    .table-wrap {
+      min-height: 0;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      padding: clamp(0.3rem, 0.72vh, 0.58rem) clamp(0.4rem, 1vw, 0.8rem);
+      vertical-align: middle;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: 0;
+    }
+
+    tr:last-child th,
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    thead th {
+      color: #ffffff;
+      background: var(--ink);
+      font-size: var(--small-size);
+      font-weight: 650;
+    }
+
+    tbody th {
+      width: 29%;
+      color: var(--muted);
+      background: var(--soft);
+      font-size: var(--small-size);
+      font-weight: 600;
+    }
+
+    tbody td {
+      overflow-wrap: anywhere;
+    }
+
+    .pass {
+      font-weight: 750;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .metric-stack {
+      display: grid;
+      grid-template-rows: repeat(3, 1fr);
+      min-height: 0;
+      border-top: 1px solid var(--line-strong);
+    }
+
+    .metric {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.15rem;
+      padding: clamp(0.5rem, 1.5vw, 1rem);
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      border-left: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    .metric:last-child {
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .metric b {
+      font-size: clamp(1.25rem, 3vw, 2.6rem);
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .footnote {
+      max-width: 100ch;
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: clamp(0.32rem, 0.8vw, 0.72rem);
+      list-style: none;
+      counter-reset: stage;
+    }
+
+    .flow li {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: clamp(0.28rem, 0.65vh, 0.5rem);
+      min-height: clamp(6.5rem, 20vh, 11rem);
+      padding: clamp(0.55rem, 1.2vw, 0.9rem);
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      counter-increment: stage;
+    }
+
+    .flow li::before {
+      content: "0" counter(stage);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: var(--small-size);
+    }
+
+    .flow li:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: calc(-1 * clamp(0.55rem, 1vw, 0.86rem));
+      padding: 0 0.08rem;
+      background: var(--paper);
+      color: var(--ink);
+      font-size: clamp(0.8rem, 1.3vw, 1.15rem);
+      transform: translateY(-50%);
+    }
+
+    .flow p {
+      color: var(--muted);
+      font-size: var(--small-size);
+      line-height: 1.35;
+    }
+
+    .branch-row,
+    .two-col,
+    .boundary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.6rem, 1.5vw, 1rem);
+      min-height: 0;
+    }
+
+    .branch,
+    .card,
+    .boundary-card {
+      min-height: 0;
+      padding: clamp(0.65rem, 1.6vw, 1.1rem);
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    .branch {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.7rem;
+      align-items: center;
+    }
+
+    .branch .label {
+      padding-right: 0.7rem;
+      border-right: 1px solid var(--line);
+      font-size: var(--small-size);
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .branch p,
+    .card p {
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .path-list,
+    .check-list,
+    .next-list {
+      list-style: none;
+    }
+
+    .path-list {
+      display: grid;
+      gap: clamp(0.35rem, 0.8vh, 0.6rem);
+      margin-top: clamp(0.5rem, 1vh, 0.8rem);
+    }
+
+    .path-list li {
+      display: grid;
+      grid-template-columns: clamp(4.8rem, 8vw, 6.5rem) 1fr;
+      gap: 0.55rem;
+      padding-top: clamp(0.35rem, 0.8vh, 0.6rem);
+      border-top: 1px solid var(--line);
+    }
+
+    .path-list b,
+    .path-list span {
+      font-size: var(--small-size);
+    }
+
+    .path-list span {
+      color: var(--muted);
+    }
+
+    .code-line {
+      padding: clamp(0.5rem, 1.2vw, 0.8rem);
+      border: 1px solid var(--line);
+      background: var(--soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: var(--small-size);
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .boundary-grid {
+      align-items: stretch;
+    }
+
+    .boundary-card {
+      display: flex;
+      flex-direction: column;
+      gap: clamp(0.45rem, 1vh, 0.75rem);
+    }
+
+    .boundary-card.proven {
+      border-top: clamp(0.35rem, 0.8vh, 0.55rem) solid var(--ink);
+    }
+
+    .boundary-card.open {
+      border-top: clamp(0.35rem, 0.8vh, 0.55rem) solid var(--line);
+    }
+
+    .check-list {
+      display: grid;
+      gap: clamp(0.35rem, 0.72vh, 0.56rem);
+    }
+
+    .check-list li {
+      display: grid;
+      grid-template-columns: 1.25rem 1fr;
+      gap: 0.4rem;
+      align-items: start;
+      font-size: clamp(0.72rem, 1.15vw, 0.98rem);
+    }
+
+    .check-list li::before {
+      content: "✓";
+      font-weight: 800;
+    }
+
+    .open .check-list li::before {
+      content: "—";
+      color: var(--muted);
+    }
+
+    .boundary-note {
+      padding: clamp(0.55rem, 1vw, 0.8rem);
+      border: 1px solid var(--line-strong);
+      background: var(--ink);
+      color: #ffffff;
+      font-size: clamp(0.72rem, 1.1vw, 0.96rem);
+      text-align: center;
+    }
+
+    .signal-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid var(--line-strong);
+      border-left: 1px solid var(--line-strong);
+    }
+
+    .signal {
+      display: flex;
+      flex-direction: column;
+      gap: clamp(0.35rem, 0.8vh, 0.6rem);
+      padding: clamp(0.7rem, 1.8vw, 1.2rem);
+      border-right: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    .signal .number {
+      width: fit-content;
+      padding: 0.12rem 0.35rem;
+      border: 1px solid var(--line-strong);
+      font-size: var(--small-size);
+      font-weight: 700;
+    }
+
+    .signal p {
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .evidence-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: clamp(0.45rem, 1vw, 0.75rem);
+    }
+
+    .evidence-strip div {
+      padding: clamp(0.5rem, 1.2vw, 0.8rem);
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .evidence-strip b,
+    .evidence-strip span {
+      display: block;
+      font-size: var(--small-size);
+    }
+
+    .evidence-strip span {
+      margin-top: 0.15rem;
+      color: var(--muted);
+    }
+
+    .next-list {
+      display: grid;
+      gap: clamp(0.4rem, 1vh, 0.72rem);
+      counter-reset: next;
+    }
+
+    .next-list li {
+      display: grid;
+      grid-template-columns: clamp(2.3rem, 4vw, 3.2rem) minmax(0, 1fr) minmax(8rem, 0.38fr);
+      gap: clamp(0.5rem, 1.2vw, 0.9rem);
+      align-items: center;
+      padding: clamp(0.55rem, 1.25vw, 0.85rem);
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      counter-increment: next;
+    }
+
+    .next-list li::before {
+      content: "0" counter(next);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: var(--small-size);
+    }
+
+    .next-list b {
+      display: block;
+      font-size: clamp(0.76rem, 1.25vw, 1.02rem);
+    }
+
+    .next-list p,
+    .next-list em {
+      color: var(--muted);
+      font-size: var(--small-size);
+      font-style: normal;
+    }
+
+    .next-list em {
+      padding-left: clamp(0.5rem, 1vw, 0.8rem);
+      border-left: 1px solid var(--line);
+    }
+
+    .closing {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(15rem, 0.65fr);
+      gap: clamp(0.8rem, 3vw, 2rem);
+      align-items: end;
+    }
+
+    .closing aside {
+      padding: clamp(0.7rem, 1.8vw, 1.2rem);
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+    }
+
+    .closing aside p {
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+
+    .nav {
+      position: fixed;
+      z-index: 20;
+      top: 50%;
+      right: clamp(0.35rem, 1vw, 0.8rem);
+      display: grid;
+      gap: 0.32rem;
+      transform: translateY(-50%);
+    }
+
+    .nav button {
+      width: clamp(1.55rem, 2.2vw, 2rem);
+      height: clamp(1.55rem, 2.2vw, 2rem);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      color: var(--muted);
+      background: var(--paper);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: clamp(0.56rem, 0.75vw, 0.7rem);
+      cursor: pointer;
+    }
+
+    .nav button[aria-current="true"] {
+      color: #ffffff;
+      background: var(--ink);
+    }
+
+    .progress {
+      position: fixed;
+      z-index: 21;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background: var(--line);
+    }
+
+    .progress span {
+      display: block;
+      width: 14.2857%;
+      height: 100%;
+      background: var(--ink);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 820px) {
+      .result-layout,
+      .closing {
+        grid-template-columns: 1fr;
+      }
+
+      .metric-stack {
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: none;
+      }
+
+      .metric {
+        border-top: 0;
+        border-left: 0;
+      }
+
+      .metric:first-child {
+        border-left: 1px solid var(--line-strong);
+      }
+
+      .flow {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .flow li {
+        min-height: clamp(5rem, 14vh, 7rem);
+      }
+
+      .flow li::after {
+        display: none;
+      }
+
+      .nav {
+        display: none;
+      }
+    }
+
+    @media (max-width: 620px) {
+      :root {
+        --slide-padding: clamp(0.75rem, 4vw, 1.2rem);
+        --content-gap: clamp(0.45rem, 1.4vh, 0.8rem);
+        --body-size: clamp(0.67rem, 2.65vw, 0.88rem);
+      }
+
+      .section-head {
+        align-items: flex-start;
+      }
+
+      .two-col,
+      .boundary-grid,
+      .branch-row {
+        grid-template-columns: 1fr;
+      }
+
+      .branch {
+        grid-template-columns: 5.2rem 1fr;
+      }
+
+      .signal-grid,
+      .evidence-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .signal {
+        display: grid;
+        grid-template-columns: 1.8rem minmax(5rem, 0.38fr) 1fr;
+        align-items: start;
+        gap: 0.45rem;
+        padding: 0.45rem;
+      }
+
+      .next-list li {
+        grid-template-columns: 1.8rem 1fr;
+      }
+
+      .next-list em {
+        grid-column: 2;
+        padding-top: 0.25rem;
+        padding-left: 0;
+        border-top: 1px solid var(--line);
+        border-left: 0;
+      }
+
+      .closing aside {
+        display: none;
+      }
+    }
+
+    @media (max-height: 700px) {
+      :root {
+        --slide-padding: clamp(0.75rem, 3vw, 2rem);
+        --content-gap: clamp(0.42rem, 1.4vh, 0.85rem);
+        --title-size: clamp(1.7rem, 5vw, 3.6rem);
+        --h2-size: clamp(1.2rem, 3vw, 2.2rem);
+      }
+
+      .flow li {
+        min-height: clamp(5rem, 18vh, 7.5rem);
+      }
+
+      .stamp-row {
+        display: none;
+      }
+    }
+
+    @media (max-height: 600px) {
+      :root {
+        --slide-padding: clamp(0.55rem, 2.4vw, 1.4rem);
+        --content-gap: clamp(0.32rem, 1vh, 0.62rem);
+        --body-size: clamp(0.64rem, 1.15vw, 0.84rem);
+        --small-size: clamp(0.56rem, 0.82vw, 0.7rem);
+      }
+
+      .flow li {
+        min-height: 0;
+      }
+
+      .footnote,
+      .evidence-strip,
+      .branch-row {
+        display: none;
+      }
+    }
+
+    @media (max-height: 500px) {
+      :root {
+        --slide-padding: clamp(0.45rem, 2vw, 1rem);
+        --title-size: clamp(1.35rem, 4vw, 2.4rem);
+        --h2-size: clamp(1rem, 2.5vw, 1.65rem);
+      }
+
+      .lead {
+        font-size: clamp(0.72rem, 1.25vw, 0.92rem);
+      }
+
+      .nav,
+      .slide-index {
+        display: none;
+      }
+
+      .closing {
+        grid-template-columns: 1fr;
+      }
+
+      .closing aside {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    @media print {
+      .nav,
+      .progress {
+        display: none;
+      }
+
+      .slide {
+        width: 100%;
+        height: 100vh;
+        break-after: page;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main aria-label="exp01b analysis presentation">
+    <section class="slide" id="slide-1" aria-labelledby="title-1">
+      <div class="slide-content">
+        <p class="kicker">CaP-X · exp01b · dual-benchmark integration check</p>
+        <h1 id="title-1">One harness,<br>two simulators.</h1>
+        <p class="lead">CaP-X executed repository-oracle Python programs through its real code-execution path on both RoboTwin and LIBERO on xdlab23.</p>
+        <div class="verdict" role="note" aria-label="Main verdict">
+          <strong>Verdict</strong>
+          <span><b>Integration passed:</b> 2/2 trials completed with sandbox return code 0, reward 1.0, task success, and replayable video.</span>
+        </div>
+        <div class="stamp-row" aria-label="Experiment tags">
+          <span class="stamp">policy: capx-oracle</span>
+          <span class="stamp">schema: capx.result.v1</span>
+          <span class="stamp">host: xdlab23</span>
+          <span class="stamp">scope: adapter + execution correctness</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-2" aria-labelledby="title-2">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Observed results</p>
+            <h2 id="title-2">Both repository-oracle trials passed.</h2>
+          </div>
+          <span class="slide-index">02 / 07</span>
+        </header>
+        <div class="result-layout">
+          <div class="table-wrap">
+            <table aria-label="exp01b benchmark results">
+              <thead>
+                <tr>
+                  <th scope="col">Metric</th>
+                  <th scope="col">LIBERO</th>
+                  <th scope="col">RoboTwin</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Task</th>
+                  <td><span class="mono">libero_object_swap[7]</span></td>
+                  <td><span class="mono">stack_blocks_two</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Code execution</th>
+                  <td class="pass">PASS</td>
+                  <td class="pass">PASS</td>
+                </tr>
+                <tr>
+                  <th scope="row">Plan predicate</th>
+                  <td class="muted">N/A</td>
+                  <td class="pass">PASS</td>
+                </tr>
+                <tr>
+                  <th scope="row">Task predicate</th>
+                  <td class="pass">PASS</td>
+                  <td class="pass">PASS</td>
+                </tr>
+                <tr>
+                  <th scope="row">Reward</th>
+                  <td>1.000</td>
+                  <td>1.000</td>
+                </tr>
+                <tr>
+                  <th scope="row">Elapsed</th>
+                  <td>42.33 s</td>
+                  <td>77.28 s</td>
+                </tr>
+                <tr>
+                  <th scope="row">Replay</th>
+                  <td class="pass">MP4 present</td>
+                  <td class="pass">MP4 present</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <aside class="metric-stack" aria-label="Headline metrics">
+            <div class="metric"><b>2 / 2</b><span>task-successful trials</span></div>
+            <div class="metric"><b>1.0</b><span>mean reward, both runs</span></div>
+            <div class="metric"><b>0</b><span>sandbox errors</span></div>
+          </aside>
+        </div>
+        <p class="footnote">The earlier exp01a direct RoboTwin <span class="mono">play_once()</span> oracle is intentionally excluded: it bypassed the CaP-X code-execution harness.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-3" aria-labelledby="title-3">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Execution-chain diagram</p>
+            <h2 id="title-3">The success signal crosses the full CaP-X path.</h2>
+          </div>
+          <span class="slide-index">03 / 07</span>
+        </header>
+        <ol class="flow" aria-label="Execution stages">
+          <li><h3>Task config</h3><p>Prompt, environment target, API list, trial count.</p></li>
+          <li><h3>CaP-X launch</h3><p>Builds the task and starts the standard trial machinery.</p></li>
+          <li><h3>Code executor</h3><p><span class="mono">CodeExecutionEnvBase</span> runs Python in the sandbox.</p></li>
+          <li><h3>Privileged API</h3><p>Program calls stable, task-level manipulation primitives.</p></li>
+          <li><h3>Simulator</h3><p>RoboTwin or LIBERO executes motion and updates state.</p></li>
+          <li><h3>Verifier + artifacts</h3><p>Predicates, reward, return code, code, responses, MP4.</p></li>
+        </ol>
+        <div class="branch-row" aria-label="Backend branches">
+          <div class="branch">
+            <span class="label">RoboTwin</span>
+            <p><span class="mono">RoboTwinEnv</span> → planner-backed primitives → task <span class="mono">check_success()</span></p>
+          </div>
+          <div class="branch">
+            <span class="label">LIBERO</span>
+            <p><span class="mono">FrankaLiberoEnv</span> → PyRoKi / robosuite motion → benchmark task predicate</p>
+          </div>
+        </div>
+        <p class="footnote">A passing row therefore means more than “the simulator imports”: the generated program boundary, API calls, motion backend, verifier, and artifact path all executed.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-4" aria-labelledby="title-4">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Backend implementation</p>
+            <h2 id="title-4">Shared harness; simulator-specific adapters.</h2>
+          </div>
+          <span class="slide-index">04 / 07</span>
+        </header>
+        <div class="two-col">
+          <article class="card">
+            <h3>RoboTwin — integration added in exp01b</h3>
+            <ul class="path-list">
+              <li><b>Environment</b><span><span class="mono">RoboTwinEnv</span> implements the CaP-X low-level contract and owns video capture.</span></li>
+              <li><b>Program API</b><span><span class="mono">RoboTwinPrivilegedApi</span> exposes actor pose, arm choice, grasp, place, displacement, gripper, and status.</span></li>
+              <li><b>Motion</b><span>Calls RoboTwin's planner-backed <span class="mono">Base_Task</span> primitives.</span></li>
+              <li><b>Semantics</b><span>Reward requires both planner success and task success.</span></li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>LIBERO — existing native CaP-X path reused</h3>
+            <ul class="path-list">
+              <li><b>Environment</b><span><span class="mono">FrankaLiberoCodeEnv</span> wraps the LIBERO simulator path.</span></li>
+              <li><b>Program API</b><span><span class="mono">FrankaLiberoPrivilegedApi</span> exposes object pose, grasp sample, gripper, and pose motion.</span></li>
+              <li><b>Motion</b><span>Pose-level actions execute through PyRoKi and robosuite.</span></li>
+              <li><b>Semantics</b><span>The integration reports task success; no separate plan predicate is defined.</span></li>
+            </ul>
+          </article>
+        </div>
+        <div class="code-line" role="note">Common external contract: task text → Python program → callable manipulation API → environment state → explicit verifier</div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-5" aria-labelledby="title-5">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Interpretation boundary</p>
+            <h2 id="title-5">Integration success is not policy success.</h2>
+          </div>
+          <span class="slide-index">05 / 07</span>
+        </header>
+        <div class="boundary-grid">
+          <article class="boundary-card proven">
+            <h3>Established by exp01b</h3>
+            <ul class="check-list">
+              <li>The CaP-X trial harness reaches both simulators.</li>
+              <li>Repository-oracle Python executes with sandbox return code 0.</li>
+              <li>Both privileged APIs can complete one concrete task.</li>
+              <li>Task predicates and reward propagate into a common result schema.</li>
+              <li>Videos and per-trial artifacts are produced and replayable.</li>
+            </ul>
+          </article>
+          <article class="boundary-card open">
+            <h3>Not established by exp01b</h3>
+            <ul class="check-list">
+              <li>No model generated the successful programs in these two rows.</li>
+              <li>No learned low-level control policy was evaluated.</li>
+              <li>No RL training, improvement curve, or credit assignment was tested.</li>
+              <li>One task and one trial per simulator do not measure generalization.</li>
+              <li>Cross-embodiment transfer remains a design target, not a result.</li>
+            </ul>
+          </article>
+        </div>
+        <p class="boundary-note"><b>Correct claim:</b> “the adapter and execution substrate work.” &nbsp; <b>Incorrect claim:</b> “CaP-X has learned to solve RoboTwin and LIBERO.”</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-6" aria-labelledby="title-6">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Success semantics</p>
+            <h2 id="title-6">Keep three outcomes separate.</h2>
+          </div>
+          <span class="slide-index">06 / 07</span>
+        </header>
+        <div class="signal-grid">
+          <article class="signal">
+            <span class="number">01</span>
+            <h3>Code execution</h3>
+            <p>Did the sandboxed program run without an execution error? Here: 2/2.</p>
+          </article>
+          <article class="signal">
+            <span class="number">02</span>
+            <h3>Plan success</h3>
+            <p>Did the motion planner accept and execute every requested primitive? RoboTwin: yes. LIBERO: not separately defined.</p>
+          </article>
+          <article class="signal">
+            <span class="number">03</span>
+            <h3>Task success</h3>
+            <p>Did the simulator's terminal predicate confirm the physical goal? Here: 2/2.</p>
+          </article>
+        </div>
+        <div class="evidence-strip" aria-label="Retained evidence">
+          <div><b>Program evidence</b><span><span class="mono">code.py</span> + all model/oracle responses</span></div>
+          <div><b>Execution evidence</b><span><span class="mono">summary.txt</span> + sandbox return code + elapsed time</span></div>
+          <div><b>Behavior evidence</b><span><span class="mono">video_combined.mp4</span> + task-completion naming</span></div>
+        </div>
+        <p class="footnote">This decomposition is the useful RL interface: execution failures, planning failures, and task failures can receive different diagnostics and rewards instead of collapsing into one bit.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-7" aria-labelledby="title-7">
+      <div class="slide-content">
+        <header class="section-head">
+          <div>
+            <p class="kicker">Next experiments</p>
+            <h2 id="title-7">Move from substrate validation to policy learning.</h2>
+          </div>
+          <span class="slide-index">07 / 07</span>
+        </header>
+        <ol class="next-list">
+          <li>
+            <div><b>Oracle → generated code</b><p>Use Qwen3-4B on the same two tasks and freeze every simulator/config variable.</p></div>
+            <em>Measures the isolated code-generation gap.</em>
+          </li>
+          <li>
+            <div><b>Scale seeds and tasks</b><p>Run 10–20 seeds across multiple LIBERO and RoboTwin tasks.</p></div>
+            <em>Report execution, planning, and task-success rates separately.</em>
+          </li>
+          <li>
+            <div><b>Add recovery and failure taxonomy</b><p>Log which primitive failed, state before/after, retries, and regeneration count.</p></div>
+            <em>Turns failures into trainable, inspectable trajectories.</em>
+          </li>
+          <li>
+            <div><b>Train across embodiments</b><p>Define a shared semantic action layer while retaining backend-specific executors.</p></div>
+            <em>Test shared policy vs per-embodiment policy under matched budgets.</em>
+          </li>
+        </ol>
+        <div class="closing">
+          <p class="lead"><b>Research direction:</b> use the verified harness as a procedural-verifier RL environment—reward program validity, planner feasibility, and physical task completion as distinct signals.</p>
+          <aside>
+            <h3>Minimum next claim</h3>
+            <p>A generated-code policy beats its frozen baseline across tasks and seeds, with gains visible in task success rather than only code execution.</p>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="nav" aria-label="Slide navigation"></nav>
+  <div class="progress" aria-hidden="true"><span></span></div>
+  <p class="sr-only" id="status" aria-live="polite">Slide 1 of 7</p>
+
+  <script>
+    /* Functional presentation controls only: keyboard, wheel, touch, and direct navigation. */
+    class SlidePresentation {
+      constructor() {
+        this.slides = [...document.querySelectorAll('.slide')];
+        this.nav = document.querySelector('.nav');
+        this.bar = document.querySelector('.progress span');
+        this.status = document.querySelector('#status');
+        this.index = 0;
+        this.wheelLocked = false;
+        this.touchStartY = null;
+        this.buildNav();
+        this.bindEvents();
+        this.observeSlides();
+        this.update(0);
+      }
+
+      buildNav() {
+        this.slides.forEach((slide, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = String(index + 1).padStart(2, '0');
+          button.setAttribute('aria-label', `Go to slide ${index + 1}`);
+          button.addEventListener('click', () => this.goTo(index));
+          this.nav.appendChild(button);
+        });
+      }
+
+      bindEvents() {
+        document.addEventListener('keydown', event => {
+          if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
+            event.preventDefault();
+            this.goTo(this.index + 1);
+          } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
+            event.preventDefault();
+            this.goTo(this.index - 1);
+          } else if (event.key === 'Home') {
+            event.preventDefault();
+            this.goTo(0);
+          } else if (event.key === 'End') {
+            event.preventDefault();
+            this.goTo(this.slides.length - 1);
+          }
+        });
+
+        window.addEventListener('wheel', event => {
+          if (this.wheelLocked || Math.abs(event.deltaY) < 18) return;
+          this.wheelLocked = true;
+          this.goTo(this.index + Math.sign(event.deltaY));
+          window.setTimeout(() => { this.wheelLocked = false; }, 420);
+        }, { passive: true });
+
+        window.addEventListener('touchstart', event => {
+          this.touchStartY = event.changedTouches[0].clientY;
+        }, { passive: true });
+
+        window.addEventListener('touchend', event => {
+          if (this.touchStartY === null) return;
+          const delta = this.touchStartY - event.changedTouches[0].clientY;
+          if (Math.abs(delta) > 45) this.goTo(this.index + Math.sign(delta));
+          this.touchStartY = null;
+        }, { passive: true });
+      }
+
+      observeSlides() {
+        const observer = new IntersectionObserver(entries => {
+          const visible = entries
+            .filter(entry => entry.isIntersecting)
+            .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (visible) this.update(this.slides.indexOf(visible.target));
+        }, { threshold: [0.55, 0.75] });
+        this.slides.forEach(slide => observer.observe(slide));
+      }
+
+      goTo(index) {
+        const next = Math.max(0, Math.min(index, this.slides.length - 1));
+        this.slides[next].scrollIntoView({ behavior: 'auto', block: 'start' });
+        this.update(next);
+      }
+
+      update(index) {
+        this.index = index;
+        [...this.nav.children].forEach((button, itemIndex) => {
+          button.setAttribute('aria-current', itemIndex === index ? 'true' : 'false');
+        });
+        this.bar.style.width = `${((index + 1) / this.slides.length) * 100}%`;
+        this.status.textContent = `Slide ${index + 1} of ${this.slides.length}`;
+        document.title = `exp01b — ${index + 1}/${this.slides.length}`;
+      }
+    }
+
+    new SlidePresentation();
+  </script>
+</body>
+</html>
