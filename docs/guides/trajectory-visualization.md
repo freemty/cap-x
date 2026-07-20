@@ -5,6 +5,35 @@ and RoboTwin. Recording is always enabled in these two adapters. Setting
 `viser_debug: true` adds a live Viser view; setting `output_dir` also saves a
 replayable `trajectory.json` beside the normal trial artifacts.
 
+## Architecture and simulator boundary
+
+```mermaid
+flowchart LR
+    P["Policy or high-level target"] --> S["Simulator planner"]
+    S --> C["Controller"]
+    C --> X["Physics"]
+    P -. "raw" .-> R["TrajectoryRecorder"]
+    S -. "planned" .-> R
+    C -. "commanded" .-> R
+    X -. "executed" .-> R
+    R --> L["Live Viser"]
+    R --> J["trajectory.json"]
+    J --> O["Offline Viser replay"]
+```
+
+The recorder and renderer are observers; they do not replace planner,
+controller, or physics calls. Recorder updates remain active if Viser cannot be
+created, and renderer failures are isolated from simulator stepping. RoboTwin
+records every physics step but refreshes the live renderer at a bounded cadence
+(50 physics steps by default), so visualization traffic does not discard the
+full offline trajectory.
+
+In the Web UI, simulator construction, stepping, rendering, and shutdown stay
+on one owner thread. Each session retains the exact Viser port that it created;
+the proxy never borrows another session's port. Timeouts preserve the last
+trajectory snapshot as a truncated failure instead of resetting and erasing the
+evidence.
+
 ## What the view means
 
 | Layer | Color | Meaning |
@@ -13,7 +42,7 @@ replayable `trajectory.json` beside the normal trial artifacts.
 | `planned` | blue | Planner joint waypoints, converted to world/base-frame EEF poses with the embodiment URDF |
 | `commanded` | orange | Joint or drive targets sent to the controller |
 | `executed` | green | Measured simulator state and EEF pose after stepping physics |
-| infeasible segment | red | At least one supplied feasibility check failed |
+| infeasible segment | red | A supplied IK, joint-limit, collision, planner, or clearance check failed |
 
 The GUI has a timestep scrubber, one visibility toggle per layer, EEF-axis
 visibility, sample counts, arm names, and the number of samples flagged as
@@ -56,7 +85,28 @@ The visualization is diagnostic rather than a collision certificate. A red
 segment is meaningful only for checks actually supplied by the planner or
 simulator. `null` feasibility fields mean “not evaluated,” not “passed.” The
 Web completion card separately reports planner success, the agent's `Finish`
-decision, and the simulator's task predicate.
+decision, and the simulator's task predicate. An incomplete task does not by
+itself turn an otherwise feasible motion path red.
+
+## Reading a policy rollout
+
+Use the four layers as a causal trace rather than treating the green path alone
+as success:
+
+| Observation | Likely interpretation |
+| --- | --- |
+| Raw target exists, planner is failed, and no planned run follows | The requested motion was rejected before controller execution |
+| Planned run exists but commanded/executed samples stop early | Execution was rejected, interrupted, or timed out |
+| Commanded and executed paths separate with rising tracking error | Controller or dynamics tracking is the limiting stage |
+| Planned, commanded, and executed paths agree but task is incomplete | The motion was feasible, but it did not solve the task predicate |
+| A segment is red | A supplied IK, joint-limit, collision, or planner check is false, or reported clearance is negative |
+| A check is `unknown` or `null` | That property was not evaluated; no feasibility conclusion is available |
+
+For a new policy, first select the intended `frame_id`, then scrub to the first
+layer divergence. Inspect its `segment_id` and feasibility fields
+(`ik_ok`, `joint_limit_ok`, `collision_free`, `planner_success`,
+`task_success`, `min_clearance_m`, and `tracking_error_m`). Finally, confirm the
+simulator task predicate independently of the agent's decision to stop.
 
 ## Live use
 
@@ -95,6 +145,19 @@ rendering, and shutdown stay on one owner thread so MuJoCo/SAPIEN graphics
 contexts are not closed from the event-loop thread. A completed session keeps
 its view alive across page refreshes until it is explicitly stopped or replaced
 by a new session.
+
+### Runtime isolation
+
+Viser is optional at simulator runtime. If a RoboTwin or LIBERO environment
+does not contain compatible Viser dependencies, keep recording enabled, leave
+`viser_debug: false`, and save `trajectory.json` through `output_dir`. Replay it
+from the normal project environment afterward. Do not add another simulator
+environment's entire `site-packages` directory just to obtain Viser: that can
+silently replace NumPy, Torch, or graphics dependencies used by MuJoCo/SAPIEN.
+
+This fallback changes only where rendering happens. The artifact schema and the
+planned/commanded/executed semantics are identical between live and offline
+views.
 
 ## Offline replay
 
@@ -150,6 +213,39 @@ records both arms, uses the selected embodiment's joint names and URDF transform
 chain, and restores all monkey patches on reset or close. Actor markers provide
 task-space context; calibrated camera point clouds are intentionally not inferred
 when camera intrinsics/extrinsics are unavailable.
+
+## Reference validation
+
+The following real-simulator acceptance runs were completed on 2026-07-20.
+Counts are evidence for the implementation, not fixed values that every policy
+must reproduce.
+
+| Simulator and case | Terminal result | Recorded evidence |
+| --- | --- | --- |
+| LIBERO oracle | Task success; reward 1; not truncated | 580 commanded and 580 executed samples; only `robot0_base`; canonical seven-joint Panda names |
+| LIBERO direct planned-path smoke | Live Viser HTTP 200 | Planned, commanded, and executed EEF poses present; static FK error `2.55e-12 m`; dynamic error `6.65e-6 m` |
+| RoboTwin ALOHA oracle | Planner and task success; 4,139 physics steps | raw 16, planned 4,139, commanded 4,156, executed 4,140; 16 plan lineages complete; no layer truncated |
+| RoboTwin planner-failure case | Planner failed; task incomplete | Eight infeasible samples; offline Viser reported the failure rather than treating missing progress as success |
+
+For the successful RoboTwin run, all 82 expected 50-step renderer ticks were
+observed. Maximum EEF FK error was `1.57e-7 m` for the left arm and `3.63e-8 m`
+for the right arm. Offline Viser returned HTTP 200 for both success and failure
+artifacts and displayed distinct planner/task status. Source and artifact SHA256
+manifests passed for both simulators.
+
+Run the focused local regression and Web build with:
+
+```bash
+.venv/bin/pytest -q \
+  tests/test_trajectory_visualization.py \
+  tests/test_libero_trajectory.py \
+  tests/test_robotwin_trajectory.py \
+  tests/test_robotwin_adapter.py \
+  tests/test_web_visualization.py \
+  tests/test_trajectory_artifact_saving.py \
+  viewer/tests/test_viewer.py
+npm --prefix web-ui run build
+```
 
 ## Python interface
 
