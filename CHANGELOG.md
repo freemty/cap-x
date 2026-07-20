@@ -20,6 +20,9 @@
   separate.
 - Allow the outer benchmark to override the RoboTwin root, Python, and GPU
   without committing host-specific edits to experiment configs.
+- Harden RoboTwin sweeps with configured-seed precedence, bounded process-group
+  timeouts, unstable-scene seed fallback, classified infrastructure failures,
+  and portable discovery of result configs copied from remote workers.
 - Expanded the PhysicalAgent comparison to distinguish the legacy privileged
   oracle from the `dev-local-bringup` file-handoff runtime and to define a
   reproducible cross-system benchmark boundary.
@@ -27,5 +30,7 @@
 ### Verification
 
 - `55 passed, 3 subtests passed` across the changed Python test surface.
+- `29 passed` across the exp00b runner, RoboTwin adapter, and viewer regression
+  surface.
 - `npm run build` completed for `web-ui`.
 - `git diff --check` completed successfully.

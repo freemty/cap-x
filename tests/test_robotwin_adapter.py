@@ -250,6 +250,15 @@ def test_reset_discovers_dynamic_actors_and_closes_the_previous_task(
     assert second_info["seed"] == 23
 
 
+def test_configured_seed_overrides_trial_runner_seed(robotwin_env: RoboTwinEnv) -> None:
+    robotwin_env.seed = 7
+
+    _, info = robotwin_env.reset(seed=1, options={"trial": 1})
+
+    assert info["seed"] == 7
+    assert FakeTask.instances[-1].setup_calls[0]["seed"] == 7
+
+
 def test_unprivileged_observation_does_not_leak_actor_or_task_state(
     robotwin_env: RoboTwinEnv,
 ) -> None:

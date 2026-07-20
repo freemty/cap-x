@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import signal
+import subprocess
 from pathlib import Path
+
+import exp.exp00a.run as sweep_runner
+import yaml
 
 from exp.exp00a.run import (
     TaskSpec,
@@ -12,6 +17,7 @@ from exp.exp00a.run import (
 )
 from exp.exp00b.analyze import build_manifest
 from viewer.app import create_app
+from viewer.results import discover_runs
 
 
 TASKS = [
@@ -49,6 +55,14 @@ def test_exp00b_selection_is_explicit_and_ordered() -> None:
 
     assert [task.task for task in selected] == TASKS
     assert all(task.benchmark == "robotwin" for task in selected)
+
+
+def test_glm_sweeps_use_non_truncating_budget_and_infra_guards() -> None:
+    for path in (Path("exp/exp00a/config.yaml"), Path("exp/exp00b/config.yaml")):
+        config = yaml.safe_load(path.read_text())
+        assert config["protocol"]["max_tokens"] == 65536
+        assert config["protocol"]["task_timeout_seconds"] == 600
+        assert config["protocol"]["robotwin_seed_candidates"] == [1, 0, 2, 3, 4]
 
 
 def test_robotwin_task_config_forwards_explicit_seed(tmp_path: Path) -> None:
@@ -110,6 +124,98 @@ def test_exp00b_refreshes_frontend_manifest_after_ledger_update(monkeypatch) -> 
     assert captured["kwargs"]["check"] is False
 
 
+def test_task_timeout_terminates_the_dedicated_process_group(
+    tmp_path: Path, monkeypatch
+) -> None:
+    waits = []
+    signals = []
+    captured = {}
+
+    class FakeProcess:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            if len(waits) == 1:
+                raise subprocess.TimeoutExpired(["worker"], timeout)
+            return -signal.SIGTERM
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(sweep_runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        sweep_runner.os,
+        "killpg",
+        lambda process_group, sig: signals.append((process_group, sig)),
+    )
+
+    with (tmp_path / "task.log").open("w") as log:
+        returncode, timed_out = sweep_runner._run_logged_process(
+            ["worker"], env={}, log=log, timeout_seconds=0.01
+        )
+
+    assert returncode == 124
+    assert timed_out is True
+    assert captured["kwargs"]["start_new_session"] is True
+    assert waits == [0.01, 10, None]
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+
+
+def test_unstable_robotwin_scene_falls_back_without_retrying_other_failures(
+    monkeypatch,
+) -> None:
+    calls = []
+    rows = [
+        {
+            "seed": 1,
+            "status": "infra_error",
+            "returncode": 1,
+            "failure_type": "unstable_scene",
+            "wall_seconds": 3.0,
+            "log_path": "seed-1.log",
+        },
+        {
+            "seed": 0,
+            "status": "complete",
+            "returncode": 0,
+            "failure_type": None,
+            "wall_seconds": 5.0,
+            "log_path": "seed-0.log",
+        },
+    ]
+
+    def fake_run(config, task, *, dry_run, seed, robotwin_task_config):
+        del config, task, dry_run, robotwin_task_config
+        calls.append(seed)
+        return rows[len(calls) - 1].copy()
+
+    monkeypatch.setattr(sweep_runner, "_run_task", fake_run)
+    config = _config()
+    config["protocol"]["robotwin_seed_candidates"] = [1, 0, 2]
+
+    row = sweep_runner._run_task_with_seed_fallback(
+        config,
+        TaskSpec(benchmark="robotwin", task="dump_bin_bigbin"),
+        dry_run=False,
+        seed=None,
+        robotwin_task_config="demo_clean",
+    )
+
+    assert calls == [1, 0]
+    assert row["status"] == "complete"
+    assert row["seed"] == 0
+    assert row["seed_fallback_used"] is True
+    assert [attempt["failure_type"] for attempt in row["seed_attempts"]] == [
+        "unstable_scene",
+        None,
+    ]
+    assert row["final_attempt_wall_seconds"] == 5.0
+    assert row["wall_seconds"] == 8.0
+
+
 def test_exp00b_manifest_updates_frontend_with_complete_and_failed_tasks(tmp_path: Path) -> None:
     config = _config()
     results = tmp_path / "exp/exp00b/results"
@@ -135,6 +241,12 @@ def test_exp00b_manifest_updates_frontend_with_complete_and_failed_tasks(tmp_pat
                 "reward": 1.0 if index == 0 else None,
                 "log_path": f"outputs/exp00b/logs/robotwin_{task}.log",
                 "finished_at": "2026-07-20T00:00:00+00:00",
+                "failure_type": "unstable_scene" if task == "handover_mic" else None,
+                "seed_attempts": (
+                    [{"seed": 1, "failure_type": "unstable_scene"}]
+                    if task == "handover_mic"
+                    else []
+                ),
             }
         )
     (results / "ledger.jsonl").write_text(
@@ -173,7 +285,9 @@ def test_exp00b_manifest_updates_frontend_with_complete_and_failed_tasks(tmp_pat
     assert complete["episodes"][0]["metrics"]["task_success"] is True
     failed = next(run for run in manifest["runs"] if run["config"]["task"] == "handover_mic")
     assert failed["status"] == "failed"
-    assert failed["episodes"][0]["error"]["stage"] == "infrastructure"
+    assert failed["metrics"]["episodes_finished"] == 0
+    assert failed["episodes"][0]["error"]["stage"] == "environment_reset"
+    assert failed["episodes"][0]["error"]["type"] == "UnstableSceneError"
 
     client = create_app(tmp_path, testing=True).test_client()
     response = client.get("/api/runs?benchmark=robotwin")
@@ -185,3 +299,32 @@ def test_exp00b_manifest_updates_frontend_with_complete_and_failed_tasks(tmp_pat
     video = client.get(video_url)
     assert video.status_code == 200
     assert video.data == b"robotwin-video"
+
+
+def test_discover_runs_relocates_remote_absolute_config(tmp_path: Path) -> None:
+    config = tmp_path / "outputs/exp00b/configs/robotwin/robotwin_click_bell.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "env:\n"
+        "  cfg:\n"
+        "    low_level:\n"
+        "      _target_: capx.envs.simulators.robotwin.RoboTwinEnv\n"
+        "      task_name: click_bell\n"
+    )
+    run = tmp_path / "outputs/exp00b/robotwin/click_bell/glm-5.2/run"
+    trial = run / "trial_01_sandboxrc_0_reward_0.000_taskcompleted_0"
+    trial.mkdir(parents=True)
+    (trial / "code.py").write_text("print('ok')\n")
+    (run / "summaries.txt").write_text(
+        "Model: glm-5.2\n"
+        "Config Path: /remote/worker/cap-x/outputs/exp00b/configs/robotwin/"
+        "robotwin_click_bell.yaml\n"
+    )
+
+    runs = discover_runs(tmp_path / "outputs/exp00b", repo_root=tmp_path)
+
+    assert len(runs) == 1
+    payload = runs[0].to_dict()
+    assert payload["benchmark"] == "robotwin"
+    assert payload["config"]["task"] == "click_bell"
+    assert payload["config"]["config_path"] == config.relative_to(tmp_path).as_posix()

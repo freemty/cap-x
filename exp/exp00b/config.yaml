@@ -14,6 +14,8 @@ protocol:
   num_workers: 1
   record_video: true
   use_oracle_code: false
+  task_timeout_seconds: 600
+  robotwin_seed_candidates: [1, 0, 2, 3, 4]
 
 scope:
   libero_suites:

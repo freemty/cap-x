@@ -31,7 +31,27 @@ def _failure_run(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     task = str(row["task"])
     digest = hashlib.sha1(task.encode()).hexdigest()[:10]
     log_path = row.get("log_path")
+    failure_type = row.get("failure_type")
+    error_stage = "infrastructure"
+    error_name = "InfraError"
     message = "CaP-X did not produce a completed trial directory"
+    if failure_type == "unstable_scene":
+        error_stage = "environment_reset"
+        error_name = "UnstableSceneError"
+        seeds = [attempt.get("seed") for attempt in row.get("seed_attempts", [])]
+        message = f"RoboTwin could not initialize a stable scene for seeds {seeds}"
+    elif failure_type == "task_timeout":
+        error_stage = "execution"
+        error_name = "TaskTimeout"
+        message = "CaP-X terminated the task process group after its configured timeout"
+    elif failure_type == "cuda_oom":
+        error_stage = "environment"
+        error_name = "CudaOutOfMemory"
+        message = "The RoboTwin worker exhausted GPU memory"
+    elif failure_type == "model_api_connection":
+        error_stage = "model_api"
+        error_name = "ModelApiConnectionError"
+        message = "The worker could not reach the configured language-model endpoint"
     if log_path:
         message += f"; inspect {log_path}"
     finished_at = row.get("finished_at") or datetime.now(timezone.utc).isoformat()  # noqa: UP017
@@ -48,6 +68,7 @@ def _failure_run(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         "runtime": {
             "host": config["runtime"]["host"],
             "gpu": config["runtime"]["gpu"],
+            "seed_attempts": row.get("seed_attempts", []),
         },
         "config": {
             "task": task,
@@ -58,7 +79,7 @@ def _failure_run(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         },
         "metrics": {
             "episodes_total": 1,
-            "episodes_finished": 1,
+            "episodes_finished": 0,
             "code_execution_rate": 0.0,
             "plan_success_rate": 0.0,
             "task_success_rate": 0.0,
@@ -91,16 +112,16 @@ def _failure_run(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
                     "responses": None,
                 },
                 "error": {
-                    "stage": "infrastructure",
-                    "type": "InfraError",
+                    "stage": error_stage,
+                    "type": error_name,
                     "message": message,
                 },
                 "details": None,
             }
         ],
         "error": {
-            "stage": "infrastructure",
-            "type": "InfraError",
+            "stage": error_stage,
+            "type": error_name,
             "message": message,
         },
         "source": "exp00b-ledger",

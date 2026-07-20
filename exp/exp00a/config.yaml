@@ -7,12 +7,14 @@ protocol:
   server_url: http://127.0.0.1:8110/chat/completions
   upstream_url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
   reasoning_effort: max
-  max_tokens: 4096
+  max_tokens: 65536
   temperature: 1.0
   trials_per_task: 1
   num_workers: 1
   record_video: true
   use_oracle_code: false
+  task_timeout_seconds: 600
+  robotwin_seed_candidates: [1, 0, 2, 3, 4]
 
 scope:
   libero_suites:

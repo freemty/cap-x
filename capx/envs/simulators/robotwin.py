@@ -173,7 +173,10 @@ class RoboTwinEnv(BaseEnv):
         self._task = self._task_cls()
         self._sim_step_count = 0
         self._frame_buffer.clear()
-        self._episode_seed = self.seed if seed is None else seed
+        # A configured benchmark seed must win over CaP-X's trial-number seed.
+        # Otherwise ``--seed`` is silently ignored because the trial runner
+        # always calls ``reset(seed=trial)``.
+        self._episode_seed = self.seed if self.seed is not None else seed
         trial = int((options or {}).get("trial", 0))
 
         with self._cwd():

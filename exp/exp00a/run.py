@@ -7,9 +7,11 @@ import copy
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -271,6 +273,80 @@ def _parse_summary(path: Path) -> dict[str, Any]:
     }
 
 
+def _run_logged_process(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    log: Any,
+    timeout_seconds: float | None,
+) -> tuple[int, bool]:
+    """Run one task in its own process group and reap the whole group on timeout."""
+
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError("protocol.task_timeout_seconds must be positive")
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        return process.wait(timeout=timeout_seconds), False
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=10)
+        # The parent may exit on SIGTERM while a child ignores it. The process
+        # group is dedicated to this task, so reap any surviving descendants.
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        return 124, True
+
+
+def _classify_infra_failure(log_path: Path, *, timed_out: bool) -> str | None:
+    if timed_out:
+        return "task_timeout"
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return "process_failure"
+    if "UnStableError" in text:
+        return "unstable_scene"
+    if "CUDA out of memory" in text:
+        return "cuda_oom"
+    if "Connection refused" in text or "ConnectError" in text:
+        return "model_api_connection"
+    return "process_failure"
+
+
+def _robotwin_seed_candidates(
+    config: dict[str, Any],
+    task: TaskSpec,
+    requested_seed: int | None,
+) -> list[int | None]:
+    if task.benchmark != "robotwin" or requested_seed is not None:
+        return [requested_seed]
+    configured = config.get("protocol", {}).get("robotwin_seed_candidates")
+    if configured is None:
+        return [None]
+    if (
+        not isinstance(configured, list)
+        or not configured
+        or not all(
+            isinstance(seed, int) and not isinstance(seed, bool) for seed in configured
+        )
+    ):
+        raise TypeError("protocol.robotwin_seed_candidates must be a non-empty list of integers")
+    if len(configured) != len(set(configured)):
+        raise ValueError("protocol.robotwin_seed_candidates contains duplicates")
+    return list(configured)
+
+
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
@@ -361,18 +437,18 @@ def _run_task(
     env = _libero_env(config) if task.benchmark == "libero" else _robotwin_env(config)
     logs_dir = REPO_ROOT / config["outputs"]["root"] / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f"{_safe_name(task.key)}.log"
+    log_path = logs_dir / f"{_safe_name(task.key)}{seed_suffix}.log"
     started = time.monotonic()
     with log_path.open("w") as log:
-        result = subprocess.run(
+        returncode, timed_out = _run_logged_process(
             command,
-            cwd=REPO_ROOT,
             env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
+            log=log,
+            timeout_seconds=protocol.get("task_timeout_seconds"),
         )
+        if timed_out:
+            timeout = protocol["task_timeout_seconds"]
+            log.write(f"\nCaP-X task timed out after {timeout} seconds.\n")
 
     model_output = output_base / protocol["model"] / "run"
     summary_path = model_output / "summaries.txt"
@@ -382,16 +458,65 @@ def _run_task(
         "model": protocol["model"],
         "oracle": False,
         "trial": 1,
-        "seed": 0 if seed is None else seed,
+        "seed": 1 if seed is None else seed,
         "status": "complete" if summary_path.is_file() else "infra_error",
-        "returncode": result.returncode,
+        "returncode": returncode,
+        "failure_type": None,
         "wall_seconds": time.monotonic() - started,
         "log_path": str(log_path.relative_to(REPO_ROOT)),
         "finished_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
     }
     if summary_path.is_file():
         row.update(_parse_summary(summary_path))
+    else:
+        row["failure_type"] = _classify_infra_failure(log_path, timed_out=timed_out)
     return row
+
+
+def _run_task_with_seed_fallback(
+    config: dict[str, Any],
+    task: TaskSpec,
+    *,
+    dry_run: bool,
+    seed: int | None,
+    robotwin_task_config: str,
+) -> dict[str, Any]:
+    candidates = _robotwin_seed_candidates(config, task, seed)
+    attempts: list[dict[str, Any]] = []
+    final: dict[str, Any] | None = None
+    for candidate in candidates:
+        row = _run_task(
+            copy.deepcopy(config),
+            task,
+            dry_run=dry_run,
+            seed=candidate,
+            robotwin_task_config=robotwin_task_config,
+        )
+        if dry_run:
+            row["seed_candidates"] = candidates
+            return row
+        attempts.append(
+            {
+                "seed": row.get("seed"),
+                "status": row.get("status"),
+                "returncode": row.get("returncode"),
+                "failure_type": row.get("failure_type"),
+                "wall_seconds": row.get("wall_seconds"),
+                "log_path": row.get("log_path"),
+            }
+        )
+        final = row
+        if row.get("failure_type") != "unstable_scene":
+            break
+        print(f"  unstable scene at seed {candidate}; trying next configured seed", flush=True)
+
+    if final is None:  # pragma: no cover - candidates are validated as non-empty
+        raise RuntimeError("No task attempt was made")
+    final["seed_attempts"] = attempts
+    final["seed_fallback_used"] = len(attempts) > 1
+    final["final_attempt_wall_seconds"] = final["wall_seconds"]
+    final["wall_seconds"] = sum(float(attempt["wall_seconds"] or 0.0) for attempt in attempts)
+    return final
 
 
 def main(default_config: str = "exp/exp00a/config.yaml") -> None:
@@ -444,8 +569,8 @@ def main(default_config: str = "exp/exp00a/config.yaml") -> None:
 
     for index, task in enumerate(selected, start=1):
         print(f"[{index}/{len(selected)}] {task.key}", flush=True)
-        row = _run_task(
-            copy.deepcopy(config),
+        row = _run_task_with_seed_fallback(
+            config,
             task,
             dry_run=args.dry_run,
             seed=args.seed,

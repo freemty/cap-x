@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,13 @@ def _resolve_config_path(value: str | None, repo_root: Path) -> Path | None:
         return None
     raw = Path(value).expanduser()
     candidates = [raw] if raw.is_absolute() else [repo_root / raw]
+    if raw.is_absolute():
+        # Result folders are often copied back from a remote worker. CaP-X
+        # summaries retain that worker's absolute config path, so also try a
+        # portable repository suffix when the original path no longer exists.
+        for index, part in enumerate(raw.parts):
+            if part in {"exp", "outputs"}:
+                candidates.append(repo_root.joinpath(*raw.parts[index:]))
     return next(
         (
             candidate.resolve()
@@ -83,10 +91,8 @@ def _config_metadata(config_path: Path | None, repo_root: Path) -> dict[str, Any
         task = f"{suite}[{task_id}]" if task_id is not None else str(suite)
     relative_config = None
     if config_path is not None:
-        try:
+        with suppress(ValueError):
             relative_config = config_path.relative_to(repo_root).as_posix()
-        except ValueError:
-            pass
     return {
         "benchmark": benchmark,
         "task": task,
