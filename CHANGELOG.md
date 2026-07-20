@@ -18,6 +18,8 @@
 - Let the RoboTwin batch runner accept an explicit actual simulator seed and
   task-config name, and keep seed-specific generated configs and outputs
   separate.
+- Allow the outer benchmark to override the RoboTwin root, Python, and GPU
+  without committing host-specific edits to experiment configs.
 - Expanded the PhysicalAgent comparison to distinguish the legacy privileged
   oracle from the `dev-local-bringup` file-handoff runtime and to define a
   reproducible cross-system benchmark boundary.

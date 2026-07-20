@@ -51,6 +51,16 @@ def _load_config(path: Path) -> dict[str, Any]:
     payload = yaml.safe_load(path.read_text())
     if not isinstance(payload, dict):
         raise TypeError(f"Expected a mapping in {path}")
+    runtime = payload.get("runtime")
+    if isinstance(runtime, dict):
+        env_overrides = {
+            "robotwin_root": os.environ.get("CAPX_BENCH_ROBOTWIN_ROOT"),
+            "robotwin_python": os.environ.get("CAPX_BENCH_ROBOTWIN_PYTHON"),
+            "gpu": os.environ.get("CAPX_BENCH_GPU"),
+        }
+        for key, value in env_overrides.items():
+            if value not in (None, ""):
+                runtime[key] = int(value) if key == "gpu" else value
     return payload
 
 

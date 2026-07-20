@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from exp.exp00a.run import TaskSpec, _configured_tasks, _refresh_analysis, _task_config
+from exp.exp00a.run import (
+    TaskSpec,
+    _configured_tasks,
+    _load_config,
+    _refresh_analysis,
+    _task_config,
+)
 from exp.exp00b.analyze import build_manifest
 from viewer.app import create_app
 
@@ -57,6 +63,24 @@ def test_robotwin_task_config_forwards_explicit_seed(tmp_path: Path) -> None:
 
     assert config["env"]["cfg"]["low_level"]["seed"] == 100000
     assert config["env"]["cfg"]["low_level"]["task_config"] == "demo_randomized"
+
+
+def test_load_config_accepts_outer_benchmark_runtime_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("runtime:\n  robotwin_root: old\n  robotwin_python: old-python\n  gpu: 5\n")
+    monkeypatch.setenv("CAPX_BENCH_ROBOTWIN_ROOT", "/runtime/robotwin")
+    monkeypatch.setenv("CAPX_BENCH_ROBOTWIN_PYTHON", "/runtime/python")
+    monkeypatch.setenv("CAPX_BENCH_GPU", "7")
+
+    config = _load_config(path)
+
+    assert config["runtime"] == {
+        "robotwin_root": "/runtime/robotwin",
+        "robotwin_python": "/runtime/python",
+        "gpu": 7,
+    }
 
 
 def test_exp00b_refreshes_frontend_manifest_after_ledger_update(monkeypatch) -> None:
