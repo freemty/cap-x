@@ -9,10 +9,12 @@ basic GUI handles.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext, suppress
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -39,6 +41,17 @@ DEFAULT_LAYER_COLORS: Mapping[TrajectoryLayer, LayerColor] = {
 INFEASIBLE_COLOR: LayerColor = (225, 45, 45)
 
 RobotStateSetter = Callable[[ArmState], None]
+
+
+@dataclass(frozen=True, slots=True)
+class _TraceRun:
+    """One contiguous, single-frame, single-plan EEF trace."""
+
+    frame_id: str
+    segment_label: str
+    samples: tuple[TrajectorySample, ...]
+    positions: np.ndarray
+    wxyzs: np.ndarray
 
 
 def create_viser_server(**kwargs: Any) -> Any:
@@ -80,6 +93,16 @@ def _clean_path_component(value: str) -> str:
     return value.strip().replace("/", "_").replace(" ", "_") or "unnamed"
 
 
+def _segment_label(sample: TrajectorySample) -> str:
+    """Return the strongest available continuity identifier for a sample."""
+
+    for key in ("segment_id", "plan_id"):
+        if key in sample.metadata and sample.metadata[key] is not None:
+            encoded = json.dumps(sample.metadata[key], sort_keys=True, separators=(",", ":"))
+            return f"{key}={encoded}"
+    return "continuous"
+
+
 class ViserTrajectoryRenderer:
     """Render a recorder or artifact as batched paths with a scrubber.
 
@@ -101,6 +124,8 @@ class ViserTrajectoryRenderer:
         max_axes_per_trace: int = 64,
         layer_colors: Mapping[TrajectoryLayer | str, LayerColor] | None = None,
         robot_state_setters: Mapping[str, RobotStateSetter] | None = None,
+        frame_id: str | None = None,
+        connect_raw_targets: bool = False,
         auto_subscribe: bool = True,
         update_every_n: int = 1,
         timeline_max: int | None = None,
@@ -131,6 +156,11 @@ class ViserTrajectoryRenderer:
         self.axes_radius = float(axes_radius)
         self.max_axes_per_trace = int(max_axes_per_trace)
         self.robot_state_setters = dict(robot_state_setters or {})
+        if frame_id is not None and (not isinstance(frame_id, str) or not frame_id.strip()):
+            raise ValueError("frame_id must be a non-empty string or None")
+        self._requested_frame_id = None if frame_id is None else frame_id.strip()
+        self._active_frame_id: str | None = None
+        self.connect_raw_targets = bool(connect_raw_targets)
         self.update_every_n = int(update_every_n)
         self._lock = threading.RLock()
         self._closed = False
@@ -295,6 +325,22 @@ class ViserTrajectoryRenderer:
                 self.robot_state_setters[normalized_arm] = setter
         self.update()
 
+    def set_frame_id(self, frame_id: str | None) -> None:
+        """Show one coordinate frame, or pass ``None`` for automatic selection.
+
+        Coordinates with different frame IDs are never overlaid.  A simulator
+        must transform poses into a common frame before recording if it wants
+        them to appear together.
+        """
+
+        if frame_id is not None and (not isinstance(frame_id, str) or not frame_id.strip()):
+            raise ValueError("frame_id must be a non-empty string or None")
+        with self._lock:
+            if self._closed:
+                return
+            self._requested_frame_id = None if frame_id is None else frame_id.strip()
+        self.update()
+
     def _atomic(self):  # type: ignore[no-untyped-def]
         atomic = getattr(self.server, "atomic", None)
         return atomic() if callable(atomic) else nullcontext()
@@ -303,29 +349,64 @@ class ViserTrajectoryRenderer:
         handle = self._scene_handles.pop(key, None)
         _safe_remove(handle)
 
-    def _trace_data(
+    def _trace_runs(
         self,
         artifact: TrajectoryArtifact,
         *,
         layer: TrajectoryLayer,
         arm: str,
         through_step: int | None,
-    ) -> tuple[list[TrajectorySample], np.ndarray, np.ndarray]:
+        frame_id: str,
+    ) -> tuple[_TraceRun, ...]:
+        runs: list[_TraceRun] = []
         samples: list[TrajectorySample] = []
         positions: list[tuple[float, float, float]] = []
         wxyzs: list[tuple[float, float, float, float]] = []
+        current_key: tuple[str, str] | None = None
+
+        def flush() -> None:
+            nonlocal samples, positions, wxyzs, current_key
+            if samples and current_key is not None:
+                runs.append(
+                    _TraceRun(
+                        frame_id=current_key[0],
+                        segment_label=current_key[1],
+                        samples=tuple(samples),
+                        positions=np.asarray(positions, dtype=np.float32).reshape((-1, 3)),
+                        wxyzs=np.asarray(wxyzs, dtype=np.float32).reshape((-1, 4)),
+                    )
+                )
+            samples = []
+            positions = []
+            wxyzs = []
+            current_key = None
+
         for sample in artifact.samples_for(layer=layer, arm=arm, through_step=through_step):
             state = sample.arm_state(arm)
             if state is None or state.ee_pose is None:
+                # Missing FK is an unknown interval, not permission to draw a
+                # straight shortcut between surrounding samples.
+                flush()
                 continue
+            if state.ee_pose.frame_id != frame_id:
+                flush()
+                continue
+            key = (state.ee_pose.frame_id, _segment_label(sample))
+            if current_key is not None and key != current_key:
+                flush()
+            current_key = key
             samples.append(sample)
             positions.append(state.ee_pose.position)
             wxyzs.append(state.ee_pose.wxyz)
-        return (
-            samples,
-            np.asarray(positions, dtype=np.float32).reshape((-1, 3)),
-            np.asarray(wxyzs, dtype=np.float32).reshape((-1, 4)),
-        )
+        flush()
+        return tuple(runs)
+
+    def _select_frame(self, frames: list[str]) -> str | None:
+        if self._requested_frame_id is not None:
+            return self._requested_frame_id
+        if "world" in frames:
+            return "world"
+        return frames[0] if frames else None
 
     def _update_robot_states(self, artifact: TrajectoryArtifact, through_step: int | None) -> None:
         # Prefer the state closest to physical execution.
@@ -367,6 +448,10 @@ class ViserTrajectoryRenderer:
             if self._follow_latest:
                 self.timeline_handle.value = min(latest_step, self._timeline_max)
 
+            summary = artifact.summary()
+            frames = list(summary["frames"])
+            active_frame = self._select_frame(frames)
+            self._active_frame_id = active_frame
             arms = sorted({state.arm for sample in artifact.samples for state in sample.arms})
             expected_scene_keys: set[str] = set()
             with self._atomic():
@@ -374,67 +459,86 @@ class ViserTrajectoryRenderer:
                     if not self._layer_visibility[layer]:
                         continue
                     for arm in arms:
-                        samples, positions, wxyzs = self._trace_data(
-                            artifact, layer=layer, arm=arm, through_step=through_step
+                        if active_frame is None:
+                            continue
+                        runs = self._trace_runs(
+                            artifact,
+                            layer=layer,
+                            arm=arm,
+                            through_step=through_step,
+                            frame_id=active_frame,
                         )
                         component = _clean_path_component(arm)
-                        trace_root = f"{self.root}/{layer.value}/{component}"
-                        line_key = f"{trace_root}/path"
-                        axes_key = f"{trace_root}/axes"
-                        if len(positions) >= 2:
-                            segments = np.stack((positions[:-1], positions[1:]), axis=1)
-                            colors = np.empty(segments.shape, dtype=np.uint8)
-                            for index in range(len(segments)):
-                                color = (
-                                    INFEASIBLE_COLOR
-                                    if _is_infeasible(samples[index])
-                                    or _is_infeasible(samples[index + 1])
-                                    else self._colors[layer]
-                                )
-                                colors[index, :, :] = color
-                            self._scene_handles[line_key] = self.server.scene.add_line_segments(
-                                line_key,
-                                points=segments,
-                                colors=colors,
-                                line_width=self.line_width,
-                                visible=True,
+                        frame_component = _clean_path_component(active_frame)
+                        for run_index, run in enumerate(runs):
+                            trace_root = (
+                                f"{self.root}/{layer.value}/{component}/"
+                                f"{frame_component}/run_{run_index}"
                             )
-                            expected_scene_keys.add(line_key)
-                        if self._show_axes and len(positions) > 0:
-                            if len(positions) > self.max_axes_per_trace:
-                                indices = np.linspace(
-                                    0,
-                                    len(positions) - 1,
-                                    self.max_axes_per_trace,
-                                    dtype=int,
+                            line_key = f"{trace_root}/path"
+                            axes_key = f"{trace_root}/axes"
+                            if len(run.positions) >= 2 and (
+                                layer is not TrajectoryLayer.RAW or self.connect_raw_targets
+                            ):
+                                segments = np.stack((run.positions[:-1], run.positions[1:]), axis=1)
+                                colors = np.empty(segments.shape, dtype=np.uint8)
+                                for index in range(len(segments)):
+                                    color = (
+                                        INFEASIBLE_COLOR
+                                        if _is_infeasible(run.samples[index])
+                                        or _is_infeasible(run.samples[index + 1])
+                                        else self._colors[layer]
+                                    )
+                                    colors[index, :, :] = color
+                                self._scene_handles[line_key] = self.server.scene.add_line_segments(
+                                    line_key,
+                                    points=segments,
+                                    colors=colors,
+                                    line_width=self.line_width,
+                                    visible=True,
                                 )
-                                axes_positions = positions[indices]
-                                axes_wxyzs = wxyzs[indices]
-                            else:
-                                axes_positions = positions
-                                axes_wxyzs = wxyzs
-                            self._scene_handles[axes_key] = self.server.scene.add_batched_axes(
-                                axes_key,
-                                batched_wxyzs=axes_wxyzs,
-                                batched_positions=axes_positions,
-                                axes_length=self.axes_length,
-                                axes_radius=self.axes_radius,
-                                visible=True,
-                            )
-                            expected_scene_keys.add(axes_key)
+                                expected_scene_keys.add(line_key)
+                            if self._show_axes and len(run.positions) > 0:
+                                if len(run.positions) > self.max_axes_per_trace:
+                                    indices = np.linspace(
+                                        0,
+                                        len(run.positions) - 1,
+                                        self.max_axes_per_trace,
+                                        dtype=int,
+                                    )
+                                    axes_positions = run.positions[indices]
+                                    axes_wxyzs = run.wxyzs[indices]
+                                else:
+                                    axes_positions = run.positions
+                                    axes_wxyzs = run.wxyzs
+                                self._scene_handles[axes_key] = self.server.scene.add_batched_axes(
+                                    axes_key,
+                                    batched_wxyzs=axes_wxyzs,
+                                    batched_positions=axes_positions,
+                                    axes_length=self.axes_length,
+                                    axes_radius=self.axes_radius,
+                                    visible=True,
+                                )
+                                expected_scene_keys.add(axes_key)
 
                 for key in tuple(self._scene_handles):
                     if key not in expected_scene_keys:
                         self._remove_scene_key(key)
 
                 self._update_robot_states(artifact, through_step)
-                summary = artifact.summary()
                 failed = sum(_is_infeasible(sample) for sample in artifact.samples)
                 selected_label = "latest" if through_step is None else str(through_step)
+                hidden_frames = [frame for frame in frames if frame != active_frame]
+                frame_label = active_frame or "none"
+                if hidden_frames:
+                    frame_label += f" (hidden: {', '.join(hidden_frames)})"
+                elif active_frame is not None and active_frame not in frames:
+                    frame_label += " (not present)"
                 self.status_handle.content = (
                     f"**Trajectory:** {summary['num_samples']} samples  \n"
                     f"**Timestep:** {selected_label} / {latest_step}  \n"
                     f"**Arms:** {', '.join(summary['arms']) or 'none'}  \n"
+                    f"**Frame:** {frame_label}  \n"
                     f"**Flagged infeasible:** {failed}"
                 )
 

@@ -386,6 +386,7 @@ class RoboTwinTrajectoryInstrumentation:
         *,
         metadata: Mapping[str, Any],
         max_samples_per_layer: int = 2_000,
+        render_every_physics_steps: int = 50,
     ) -> None:
         self.recorder = TrajectoryRecorder(
             max_samples_per_layer=max_samples_per_layer,
@@ -398,6 +399,9 @@ class RoboTwinTrajectoryInstrumentation:
         self._high_level_step = 0
         self._planned_step = 0
         self._physics_step = 0
+        self._next_plan_id = 0
+        self._active_segment_id: str | None = None
+        self._render_every_physics_steps = max(1, int(render_every_physics_steps))
         self._warnings: set[str] = set()
         self._viser_urdf: Any | None = None
         self._viser_robot_base: Any | None = None
@@ -445,6 +449,8 @@ class RoboTwinTrajectoryInstrumentation:
         self._high_level_step = 0
         self._planned_step = 0
         self._physics_step = 0
+        self._next_plan_id = 0
+        self._active_segment_id = None
 
     def connect_renderer(self, server: Any, *, timeline_max: int | None = None) -> bool:
         if server is None:
@@ -612,6 +618,17 @@ class RoboTwinTrajectoryInstrumentation:
             def wrapped_move(*args: Any, **kwargs: Any) -> Any:
                 self._record_high_level_move(args, kwargs)
                 result = move(*args, **kwargs)
+                if isinstance(result, (bool, np.bool_)) and not bool(result):
+                    failed_step = max(0, self._high_level_step - 1)
+                    self.recorder.append_raw(
+                        step=failed_step,
+                        feasibility=FeasibilityMetrics(planner_success=False),
+                        metadata={
+                            "source": "task.move",
+                            "segment_id": f"high-level-{failed_step}",
+                            "outcome": "move_failed",
+                        },
+                    )
                 self._update_renderer()
                 return result
 
@@ -626,11 +643,26 @@ class RoboTwinTrajectoryInstrumentation:
             @functools.wraps(take_dense_action)
             def wrapped_dense_action(*args: Any, **kwargs: Any) -> Any:
                 control_seq = kwargs.get("control_seq", args[0] if args else None)
-                self._record_dense_plan(control_seq)
+                segment_id = self._record_dense_plan(control_seq)
+                previous_segment_id = self._active_segment_id
+                self._active_segment_id = segment_id
                 self._update_renderer()
-                result = take_dense_action(*args, **kwargs)
-                self._update_renderer()
-                return result
+                try:
+                    result = take_dense_action(*args, **kwargs)
+                    if isinstance(result, (bool, np.bool_)) and not bool(result):
+                        self.recorder.append_raw(
+                            step=self._high_level_step,
+                            feasibility=FeasibilityMetrics(planner_success=False),
+                            metadata={
+                                "source": "take_dense_action",
+                                "segment_id": segment_id,
+                                "outcome": "execution_rejected",
+                            },
+                        )
+                    return result
+                finally:
+                    self._update_renderer()
+                    self._active_segment_id = previous_segment_id
 
             if not patches.patch(task, "take_dense_action", wrapped_dense_action):
                 self._warnings.add("could not instrument task.take_dense_action")
@@ -646,6 +678,8 @@ class RoboTwinTrajectoryInstrumentation:
                 result = scene_step(*args, **kwargs)
                 self._physics_step += 1
                 self._record_drive_and_measured_state()
+                if self._physics_step % self._render_every_physics_steps == 0:
+                    self._update_renderer()
                 return result
 
             if not patches.patch(scene, "step", wrapped_scene_step):
@@ -670,6 +704,9 @@ class RoboTwinTrajectoryInstrumentation:
         if renderer is None:
             return
         try:
+            # Actor handles share the same throttled cadence as the trajectory;
+            # updating them on every physics tick floods Viser's websocket.
+            self._update_viser_actor_markers()
             renderer.update()
         except Exception as exc:
             self._warn("renderer update", exc)
@@ -685,7 +722,10 @@ class RoboTwinTrajectoryInstrumentation:
                 self.recorder.append_raw(
                     step=self._high_level_step,
                     payload={"args": _jsonable(args), "kwargs": _jsonable(kwargs)},
-                    metadata={"source": "task.move"},
+                    metadata={
+                        "source": "task.move",
+                        "segment_id": f"high-level-{self._high_level_step}",
+                    },
                 )
                 self._high_level_step += 1
                 return
@@ -715,6 +755,7 @@ class RoboTwinTrajectoryInstrumentation:
                     "save_freq": _jsonable(kwargs.get("save_freq")),
                 }
                 feasibility = self._planner_feasibility()
+                segment_id = f"high-level-{sample_step}"
                 self.recorder.append_raw(
                     step=sample_step,
                     arms=arm_states,
@@ -723,6 +764,7 @@ class RoboTwinTrajectoryInstrumentation:
                     metadata={
                         "source": "task.move",
                         "action_index": action_index,
+                        "segment_id": segment_id,
                     },
                 )
                 self.recorder.append_commanded(
@@ -733,6 +775,7 @@ class RoboTwinTrajectoryInstrumentation:
                     metadata={
                         "source": "high_level_target",
                         "action_index": action_index,
+                        "segment_id": segment_id,
                     },
                 )
                 self._high_level_step += 1
@@ -783,10 +826,24 @@ class RoboTwinTrajectoryInstrumentation:
             metadata={"action": action_kind or "unknown", "frame": "world"},
         )
 
-    def _record_dense_plan(self, control_seq: Any) -> None:
+    def _record_dense_plan(self, control_seq: Any) -> str | None:
+        plan_id = self._next_plan_id
+        self._next_plan_id += 1
+        segment_id = f"plan-{plan_id}"
         if not isinstance(control_seq, Mapping):
             self._warnings.add("take_dense_action control_seq is not a mapping")
-            return
+            self.recorder.append_raw(
+                step=self._high_level_step,
+                payload={"control_seq": _jsonable(control_seq)},
+                feasibility=FeasibilityMetrics(planner_success=False),
+                metadata={
+                    "source": "take_dense_action",
+                    "plan_id": plan_id,
+                    "segment_id": segment_id,
+                    "outcome": "invalid_control_sequence",
+                },
+            )
+            return segment_id
         try:
             arm_controls: dict[str, Mapping[str, Any]] = {}
             gripper_controls: dict[str, Mapping[str, Any]] = {}
@@ -837,9 +894,14 @@ class RoboTwinTrajectoryInstrumentation:
                     self.recorder.append_planned(
                         step=self._planned_step,
                         arms=states,
-                        feasibility=self._planner_feasibility(),
+                        # Reaching take_dense_action means RoboTwin produced a
+                        # finite executable control sequence, even on task
+                        # classes that do not expose a plan_success attribute.
+                        feasibility=FeasibilityMetrics(planner_success=True),
                         metadata={
                             "source": "take_dense_action",
+                            "plan_id": plan_id,
+                            "segment_id": segment_id,
                             "control_index": control_index,
                             "joint_velocities": velocity_payload,
                         },
@@ -847,6 +909,18 @@ class RoboTwinTrajectoryInstrumentation:
                     self._planned_step += 1
         except Exception as exc:
             self._warn("dense plan recording", exc)
+            self.recorder.append_raw(
+                step=self._high_level_step,
+                feasibility=FeasibilityMetrics(planner_success=False),
+                metadata={
+                    "source": "take_dense_action",
+                    "plan_id": plan_id,
+                    "segment_id": segment_id,
+                    "outcome": "recording_error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+        return segment_id
 
     @staticmethod
     def _matrix(value: Any) -> np.ndarray | None:
@@ -877,7 +951,10 @@ class RoboTwinTrajectoryInstrumentation:
                     step=self._physics_step,
                     arms=drive_states,
                     feasibility=self._planner_feasibility(),
-                    metadata={"source": "drive_target"},
+                    metadata={
+                        "source": "drive_target",
+                        "segment_id": self._active_segment_id or "initial",
+                    },
                 )
             measured_states = self._collect_robot_states(real=True)
             if measured_states:
@@ -885,9 +962,12 @@ class RoboTwinTrajectoryInstrumentation:
                     step=self._physics_step,
                     arms=measured_states,
                     feasibility=self._planner_feasibility(include_task=True),
-                    metadata={"source": "real_qpos", "frame": "world"},
+                    metadata={
+                        "source": "real_qpos",
+                        "segment_id": self._active_segment_id or "initial",
+                        "frame": "world",
+                    },
                 )
-            self._update_viser_actor_markers()
         except Exception as exc:
             self._warn("scene.step recording", exc)
 

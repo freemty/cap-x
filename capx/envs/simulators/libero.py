@@ -137,6 +137,8 @@ class FrankaLiberoEnv(BaseEnv):
         )
         self.trajectory_renderer: Any | None = None
         self._trajectory_plan_count = 0
+        self._trajectory_command_count = 0
+        self._active_command_segment_id = "initial"
         self._closed = False
 
         # Viser debugging
@@ -381,6 +383,7 @@ class FrankaLiberoEnv(BaseEnv):
             {
                 "source": str(source),
                 "plan_id": plan_id,
+                "segment_id": f"plan-{plan_id}",
                 "waypoint_count": waypoint_count,
             }
         )
@@ -416,6 +419,46 @@ class FrankaLiberoEnv(BaseEnv):
                 )
         return plan_id
 
+    def record_planning_failure(
+        self,
+        *,
+        source: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Record a planner attempt that produced no executable path.
+
+        Failed planning otherwise leaves no geometry and can look like an idle
+        policy.  A raw event keeps the failure visible in summaries and in the
+        Viser feasibility status without inventing a planned trajectory.
+        """
+
+        plan_id = self._trajectory_plan_count
+        self._trajectory_plan_count += 1
+        event_metadata = dict(metadata or {})
+        event_metadata.update(
+            {
+                "source": str(source),
+                "plan_id": plan_id,
+                "segment_id": f"plan-{plan_id}",
+                "outcome": "planning_failed",
+            }
+        )
+        self.trajectory_recorder.append_raw(
+            step=self._sim_step_count,
+            timestamp_s=self.get_current_time_s(),
+            feasibility=FeasibilityMetrics(planner_success=False),
+            metadata=event_metadata,
+        )
+        self._update_trajectory_renderer()
+        return plan_id
+
+    def _next_trajectory_command_segment(self, prefix: str) -> str:
+        """Allocate a stable segment ID, including for lightweight test adapters."""
+
+        command_id = getattr(self, "_trajectory_command_count", 0)
+        self._trajectory_command_count = command_id + 1
+        return f"{prefix}-{command_id}"
+
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -442,6 +485,8 @@ class FrankaLiberoEnv(BaseEnv):
         self._step_count = 0
         self._sim_step_count = 0
         self._trajectory_plan_count = 0
+        self._trajectory_command_count = 0
+        self._active_command_segment_id = "initial"
 
         self._current_joints = self.handle.env.sim.data.qpos[:7].copy()
         self.home_joint_position = np.array(libero_obs["robot0_joint_pos"], dtype=np.float64)
@@ -456,6 +501,12 @@ class FrankaLiberoEnv(BaseEnv):
         # Rebase the policy clock after those ten internal physics steps and
         # refresh the cached EEF pose before constructing the first observation.
         self._sim_step_count = 0
+        self.base_link_wxyz_xyz = np.concatenate(
+            [
+                self.handle.env.sim.data.xquat[self.base_link_idx],
+                self.handle.env.sim.data.xpos[self.base_link_idx],
+            ]
+        )
         self.gripper_link_wxyz_xyz = np.concatenate(
             [
                 self.handle.env.sim.data.xquat[self.gripper_link_idx],
@@ -503,6 +554,7 @@ class FrankaLiberoEnv(BaseEnv):
         target = np.asarray(joints, dtype=np.float64).reshape(7)
         self._current_joints = target
         commanded_ee_pose = self._planned_ee_poses(target.reshape(1, 7))[0]
+        segment_id = self._next_trajectory_command_segment("command")
 
         steps = 0
         while steps < max_steps:
@@ -535,6 +587,7 @@ class FrankaLiberoEnv(BaseEnv):
                 },
                 metadata={
                     "controller": "JOINT_POSITION",
+                    "segment_id": segment_id,
                     "controller_action": tuple(float(value) for value in action),
                     "target_error_l2": float(error),
                 },
@@ -573,6 +626,7 @@ class FrankaLiberoEnv(BaseEnv):
                 feasibility=FeasibilityMetrics(tracking_error_m=tracking_error_m),
                 metadata={
                     "controller": "JOINT_POSITION",
+                    "segment_id": segment_id,
                     "tracking_error_l2": float(np.linalg.norm(actual_joints - target)),
                 },
             )
@@ -595,13 +649,36 @@ class FrankaLiberoEnv(BaseEnv):
             fraction: 0.0 (closed) to 1.0 (open)
         """
         self._gripper_fraction = float(np.clip(fraction, 0.0, 1.0))
+        self._active_command_segment_id = self._next_trajectory_command_segment(
+            "gripper"
+        )
 
     def _step_once(self) -> None:
         """Execute one simulation step with current control state."""
+        current_joints = self._read_panda_joint_positions()
         # Build action from current state
         action = np.concatenate([np.zeros_like(self._current_joints), [self._gripper_fraction]])
         # Map gripper: 1.0 (open) -> -1.0, 0.0 (closed) -> 1.0
         action[-1] = 1.0 - action[-1] * 2.0
+
+        sample_step = self._sim_step_count + 1
+        self.trajectory_recorder.append_commanded(
+            step=sample_step,
+            timestamp_s=sample_step / self._control_freq,
+            arms={
+                "panda": self._arm_state(
+                    current_joints,
+                    include_ee_pose=False,
+                )
+            },
+            metadata={
+                "controller": "JOINT_POSITION_GRIPPER_HOLD",
+                "segment_id": getattr(
+                    self, "_active_command_segment_id", "initial"
+                ),
+                "controller_action": tuple(float(value) for value in action),
+            },
+        )
 
         self._current_obs, self._current_reward, self._current_done, self._current_info = (
             self.handle.step(action)
@@ -613,6 +690,23 @@ class FrankaLiberoEnv(BaseEnv):
                 self.handle.env.sim.data.xquat[self.gripper_link_idx],
                 self.handle.env.sim.data.xpos[self.gripper_link_idx],
             ]
+        )
+
+        self.trajectory_recorder.append_executed(
+            step=self._sim_step_count,
+            timestamp_s=self.get_current_time_s(),
+            arms={
+                "panda": self._arm_state(
+                    self._read_panda_joint_positions(),
+                    include_ee_pose=True,
+                )
+            },
+            metadata={
+                "controller": "JOINT_POSITION_GRIPPER_HOLD",
+                "segment_id": getattr(
+                    self, "_active_command_segment_id", "initial"
+                ),
+            },
         )
 
         if self.viser_debug and self._sim_step_count % self._subsample_rate == 0:

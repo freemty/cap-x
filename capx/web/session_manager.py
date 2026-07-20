@@ -7,9 +7,10 @@ import ctypes
 import logging
 import threading
 import uuid
+from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Callable
 
 from fastapi import WebSocket
 
@@ -20,6 +21,137 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+OWNER_INTERRUPT_TIMEOUT_SECONDS = 2.0
+OWNER_CLOSE_TIMEOUT_SECONDS = 5.0
+
+
+class OwnerThreadInterrupted(RuntimeError):
+    """Normal asyncio-facing form of an injected ``KeyboardInterrupt``."""
+
+
+async def run_on_owner_executor(
+    session: "Session",
+    func: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run one environment operation on its single owner executor.
+
+    The executor future is shielded and retained on the session.  Cancelling the
+    coroutine therefore cannot lose a still-running constructor/step call, and
+    cleanup can interrupt and wait for the exact call before closing the env.
+    """
+
+    executor = session.env_executor
+    if executor is None:
+        raise RuntimeError("Environment owner executor is not available")
+    if session.env_executor_poisoned:
+        raise RuntimeError("Environment owner executor is poisoned")
+
+    loop = asyncio.get_running_loop()
+
+    def wrapper() -> Any:
+        thread_id = threading.get_ident()
+        try:
+            try:
+                session.execution_thread_id = thread_id
+                return func(*args, **kwargs)
+            finally:
+                if session.execution_thread_id == thread_id:
+                    session.execution_thread_id = None
+        except KeyboardInterrupt as exc:
+            # Never let BaseException escape an executor Future into asyncio's
+            # event loop.  Cleanup treats this normal exception as a released
+            # owner thread.
+            raise OwnerThreadInterrupted("Environment owner call interrupted") from exc
+
+    future = loop.run_in_executor(executor, wrapper)
+    session.owner_call_future = future
+    try:
+        return await asyncio.shield(future)
+    finally:
+        if future.done() and session.owner_call_future is future:
+            session.owner_call_future = None
+
+
+def request_owner_interrupt(session: "Session") -> bool:
+    """Inject an interrupt into the current owner call, if it has started."""
+
+    future = session.owner_call_future
+    thread_id = session.execution_thread_id
+    if future is None or future.done() or thread_id is None:
+        return False
+    logger.info("Interrupting environment owner thread %s", thread_id)
+    sent = _raise_exception_in_thread(thread_id, KeyboardInterrupt)
+    if not sent:
+        logger.warning("Environment owner-thread interrupt failed")
+    return sent
+
+
+async def interrupt_owner_call(
+    session: "Session",
+    *,
+    timeout: float = OWNER_INTERRUPT_TIMEOUT_SECONDS,
+) -> bool:
+    """Interrupt and wait for the retained owner call to release its worker.
+
+    Returns ``True`` only when the call is no longer occupying the executor.
+    A call stuck in native code may not observe ``PyThreadState_SetAsyncExc``;
+    in that case the executor is explicitly poisoned so no reset/close is ever
+    queued behind it.
+    """
+
+    future = session.owner_call_future
+    if future is None:
+        return True
+
+    def consume_done_future() -> None:
+        try:
+            future.result()
+        except BaseException:
+            pass
+        if session.owner_call_future is future:
+            session.owner_call_future = None
+
+    if future.done():
+        consume_done_future()
+        return True
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(timeout, 0.0)
+    interrupt_sent = False
+
+    while not future.done():
+        if not interrupt_sent and session.execution_thread_id is not None:
+            interrupt_sent = request_owner_interrupt(session)
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            session.env_executor_poisoned = True
+            logger.error(
+                "Environment owner executor for session %s did not release; marking it poisoned",
+                session.session_id,
+            )
+            return False
+
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(future),
+                timeout=min(0.05, remaining),
+            )
+        except asyncio.TimeoutError:
+            continue
+        except asyncio.CancelledError:
+            if not future.cancelled():
+                raise
+        except BaseException:
+            # The owner operation failed or observed the injected interrupt;
+            # either way the single worker has been released.
+            pass
+
+    consume_done_future()
+    return True
+
 
 async def run_blocking_with_interrupt(
     session: "Session",
@@ -27,19 +159,9 @@ async def run_blocking_with_interrupt(
     *args: Any,
     **kwargs: Any,
 ) -> Any:
-    """Run a blocking function in a thread while tracking the thread ID for interruption.
+    """Backward-compatible wrapper around the environment owner executor."""
 
-    This allows the stop_session method to interrupt long-running code execution.
-    """
-    def wrapper():
-        # Store the current thread ID so it can be interrupted
-        session.execution_thread_id = threading.get_ident()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            session.execution_thread_id = None
-
-    return await asyncio.to_thread(wrapper)
+    return await run_on_owner_executor(session, func, *args, **kwargs)
 
 
 def _raise_exception_in_thread(thread_id: int, exception_type: type) -> bool:
@@ -93,11 +215,13 @@ class Session:
 
     # Environment reference for forced shutdown
     env: Any = None
-    env_executor: Any = None
+    env_executor: Executor | None = None
     viser_port: int | None = None
 
     # Thread tracking for interruption
     execution_thread_id: int | None = None
+    owner_call_future: asyncio.Future[Any] | None = None
+    env_executor_poisoned: bool = False
 
     # Connected WebSocket clients
     websockets: list[WebSocket] = field(default_factory=list)
@@ -144,6 +268,8 @@ class Session:
         self.env_executor = None
         self.viser_port = None
         self.execution_thread_id = None
+        self.owner_call_future = None
+        self.env_executor_poisoned = False
         self.current_block_index = 0
         self.total_code_blocks = 0
         self.num_regenerations = 0
@@ -186,6 +312,9 @@ class SessionManager:
         # Cancel any running task
         if session.task and not session.task.done():
             session.cancel_event.set()
+            # Inject before cancellation so the retained executor call has a
+            # chance to unwind rather than being hidden by task cancellation.
+            request_owner_interrupt(session)
             session.task.cancel()
             try:
                 await asyncio.wait_for(session.task, timeout=2.0)
@@ -207,11 +336,12 @@ class SessionManager:
     async def _close_environment(self, session: Session) -> None:
         """Close a simulator on the thread that owns its rendering context."""
 
-        env = session.env
         executor = session.env_executor
-        session.env = None
-        session.env_executor = None
-        session.viser_port = None
+
+        # Initialization or step may still own the only worker even after its
+        # awaiting task was cancelled.  Never enqueue close behind that call.
+        released = await interrupt_owner_call(session)
+        env = session.env  # Initialization may have registered it while waiting.
 
         def close() -> None:
             if env is None:
@@ -221,19 +351,57 @@ class SessionManager:
             elif hasattr(env, "shutdown"):
                 env.shutdown()
 
+        close_task: asyncio.Task[Any] | None = None
         try:
-            if env is not None and executor is not None:
-                loop = asyncio.get_running_loop()
-                await asyncio.wait_for(loop.run_in_executor(executor, close), timeout=5.0)
-            elif env is not None:
-                await asyncio.wait_for(asyncio.to_thread(close), timeout=5.0)
+            if env is not None and executor is not None and released:
+                close_task = asyncio.create_task(run_on_owner_executor(session, close))
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(close_task),
+                        timeout=OWNER_CLOSE_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Timed out while closing environment for session %s",
+                        session.session_id,
+                    )
+                    released = await interrupt_owner_call(session)
+                    if not released:
+                        session.env_executor_poisoned = True
+                finally:
+                    if close_task.done():
+                        await asyncio.gather(close_task, return_exceptions=True)
+                    elif not released:
+                        close_task.cancel()
+                        await asyncio.gather(close_task, return_exceptions=True)
+            elif env is not None and executor is None:
+                await asyncio.wait_for(
+                    asyncio.to_thread(close), timeout=OWNER_CLOSE_TIMEOUT_SECONDS
+                )
+            elif env is not None and not released:
+                logger.error(
+                    "Skipping environment close for poisoned session %s; owner worker is still occupied",
+                    session.session_id,
+                )
         except asyncio.TimeoutError:
             logger.warning("Timed out while closing environment for session %s", session.session_id)
         except Exception as exc:
             logger.warning("Error closing environment for session %s: %s", session.session_id, exc)
         finally:
+            session.env = None
+            session.env_executor = None
+            session.viser_port = None
+            session.execution_thread_id = None
+            session.owner_call_future = None
             if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
+                if session.env_executor_poisoned:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                else:
+                    # The owner call and close have both completed, so this join
+                    # is bounded and proves the worker was reclaimed.
+                    await asyncio.to_thread(
+                        executor.shutdown, wait=True, cancel_futures=True
+                    )
 
     async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID."""
@@ -258,13 +426,9 @@ class SessionManager:
             logger.info(f"STOPPING session (safety interrupt): {session_id}")
             session.cancel_event.set()
 
-            # Interrupt the execution thread if code is running
-            if session.execution_thread_id is not None:
-                logger.info(f"Interrupting execution thread {session.execution_thread_id}")
-                if _raise_exception_in_thread(session.execution_thread_id, KeyboardInterrupt):
-                    logger.info("Thread interrupt sent successfully")
-                else:
-                    logger.warning("Thread interrupt failed")
+            # Interrupt before cancelling the asyncio task; the executor future
+            # remains retained for _close_environment to await safely.
+            request_owner_interrupt(session)
 
             # Cancel the task immediately (don't wait for graceful shutdown)
             session.task.cancel()
@@ -279,7 +443,6 @@ class SessionManager:
 
         if session.task is not None or had_environment:
             session.state = SessionState.IDLE
-            session.execution_thread_id = None
             logger.info(f"Session {session_id} stopped")
             return True
 

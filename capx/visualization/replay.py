@@ -21,6 +21,15 @@ from .viser_trajectory import ViserTrajectoryRenderer, create_viser_server
 
 LOGGER = logging.getLogger(__name__)
 
+_CANONICAL_PANDA_JOINTS = tuple(f"panda_joint{index}" for index in range(1, 8))
+_PANDA_JOINT_ALIASES = {
+    **{name: name for name in _CANONICAL_PANDA_JOINTS},
+    **{
+        f"robot0_joint{index}": f"panda_joint{index}"
+        for index in range(1, 8)
+    },
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay a CaP-X trajectory in Viser")
@@ -39,6 +48,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _canonical_panda_names(names: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Canonicalize only a complete, known seven-joint Panda name set."""
+
+    if len(names) != len(_CANONICAL_PANDA_JOINTS):
+        return None
+    try:
+        canonical = tuple(_PANDA_JOINT_ALIASES[name] for name in names)
+    except KeyError:
+        return None
+    if set(canonical) != set(_CANONICAL_PANDA_JOINTS):
+        return None
+    return canonical
+
+
+def _joint_configuration_for_urdf(
+    state: ArmState, urdf_joint_names: tuple[str, ...]
+) -> np.ndarray | None:
+    """Map recorded joints to URDF order without positional guesswork.
+
+    Arbitrary embodiments require an exact joint-name set.  The only alias
+    mapping is the complete canonical Panda set used by LIBERO
+    (``robot0_joint1..7`` <-> ``panda_joint1..7``).  Every path requires strict
+    dimensional equality.
+    """
+
+    source_names = tuple(state.joint_names)
+    target_names = tuple(str(name) for name in urdf_joint_names)
+    values = tuple(state.joint_positions)
+    if (
+        not values
+        or len(source_names) != len(values)
+        or len(target_names) != len(values)
+        or len(set(target_names)) != len(target_names)
+    ):
+        return None
+
+    if set(source_names) == set(target_names):
+        by_name = dict(zip(source_names, values, strict=True))
+        return np.asarray([by_name[name] for name in target_names], dtype=float)
+
+    canonical_source = _canonical_panda_names(source_names)
+    canonical_target = _canonical_panda_names(target_names)
+    if canonical_source is None or canonical_target is None:
+        return None
+    by_canonical_name = dict(zip(canonical_source, values, strict=True))
+    return np.asarray(
+        [by_canonical_name[name] for name in canonical_target], dtype=float
+    )
+
+
 def _make_urdf_setter(server: Any, urdf_path: Path) -> tuple[Any, Any]:
     try:
         from viser.extras import ViserUrdf
@@ -48,14 +107,15 @@ def _make_urdf_setter(server: Any, urdf_path: Path) -> tuple[Any, Any]:
     joint_names = tuple(urdf.get_actuated_joint_names())
 
     def set_state(state: ArmState) -> None:
-        if not state.joint_positions:
+        configuration = _joint_configuration_for_urdf(state, joint_names)
+        if configuration is None:
+            LOGGER.warning(
+                "URDF playback skipped: recorded joints %s do not safely map to %s",
+                state.joint_names,
+                joint_names,
+            )
             return
-        by_name = dict(zip(state.joint_names, state.joint_positions, strict=True))
-        missing = [name for name in joint_names if name not in by_name]
-        if missing:
-            LOGGER.debug("URDF playback skipped; missing joints: %s", missing)
-            return
-        urdf.update_cfg(np.asarray([by_name[name] for name in joint_names], dtype=float))
+        urdf.update_cfg(configuration)
 
     return urdf, set_state
 

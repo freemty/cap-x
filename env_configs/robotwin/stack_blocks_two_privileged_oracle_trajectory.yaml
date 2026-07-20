@@ -19,6 +19,7 @@ env:
       max_steps: 128
       video_stride: 8
       trajectory_max_samples_per_layer: 10000
+      trajectory_render_every_physics_steps: 50
       viser_debug: true
     privileged: true
     prompt: |

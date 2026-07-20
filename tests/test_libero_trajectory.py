@@ -163,7 +163,7 @@ def _bare_env(module: Any) -> Any:
     env._suite_name = "libero_10"
     env._task_id = 0
     env._control_freq = 20
-    env._panda_joint_names = tuple(f"robot0_joint{i}" for i in range(1, 8))
+    env._panda_joint_names = tuple(f"panda_joint{i}" for i in range(1, 8))
     env._panda_joint_qpos_addrs = list(range(7))
     env.base_link_idx = 0
     env.gripper_link_idx = 1
@@ -189,6 +189,9 @@ def _bare_env(module: Any) -> Any:
         metadata=env._trajectory_episode_metadata(seed=env.seed)
     )
     env._trajectory_plan_count = 0
+    env._trajectory_command_count = 0
+    env._active_command_segment_id = "initial"
+    env.urdf = None
     env._closed = False
     return env
 
@@ -207,8 +210,10 @@ def test_move_records_commanded_action_and_executed_pose(monkeypatch: Any) -> No
     assert commanded[0].arm_state("panda").joint_positions == tuple(target)
     assert len(commanded[0].metadata["controller_action"]) == 8
     actual = executed[0].arm_state("panda")
+    assert actual.joint_names == tuple(f"panda_joint{i}" for i in range(1, 8))
     assert actual.joint_positions == tuple(target)
     assert actual.ee_pose is not None
+    assert actual.ee_pose.frame_id == "robot0_base"
     assert executed[0].step == commanded[0].step == 1
     assert env.trajectory_summary()["layers"] == {
         "raw": 0,
@@ -216,6 +221,24 @@ def test_move_records_commanded_action_and_executed_pose(monkeypatch: Any) -> No
         "commanded": 1,
         "executed": 1,
     }
+
+
+def test_gripper_hold_records_commanded_and_executed_layers(monkeypatch: Any) -> None:
+    module = _import_libero_simulator(monkeypatch)
+    env = _bare_env(module)
+
+    env._set_gripper(0.0)
+    env._step_once()
+    env._step_once()
+
+    artifact = env.trajectory_snapshot()
+    commanded = artifact.samples_for("commanded")
+    executed = artifact.samples_for("executed")
+    assert len(commanded) == len(executed) == 2
+    assert {sample.metadata["segment_id"] for sample in commanded} == {"gripper-0"}
+    assert {sample.metadata["segment_id"] for sample in executed} == {"gripper-0"}
+    assert commanded[-1].arm_state("panda").gripper == pytest.approx(0.0)
+    assert executed[-1].arm_state("panda").ee_pose.frame_id == "robot0_base"
 
 
 def test_planned_path_is_not_mislabeled_as_executed(monkeypatch: Any) -> None:
@@ -237,6 +260,7 @@ def test_planned_path_is_not_mislabeled_as_executed(monkeypatch: Any) -> None:
     assert artifact.samples_for("executed") == ()
     assert planned[2].arm_state("panda").joint_positions == tuple(trajectory[2])
     assert planned[0].metadata["source"] == "curobo_grasp"
+    assert planned[0].metadata["segment_id"] == "plan-0"
     assert planned[0].metadata["object_name"] == "mug"
     assert planned[0].feasibility.planner_success is True
 
@@ -276,6 +300,10 @@ def test_planned_path_uses_urdf_fk_and_restores_live_configuration(
 
     planned = env.trajectory_snapshot().samples_for("planned")
     assert all(sample.arm_state("panda").ee_pose is not None for sample in planned)
+    assert all(
+        sample.arm_state("panda").ee_pose.frame_id == "robot0_base"
+        for sample in planned
+    )
     expected_position = trajectory[1, :3].copy()
     expected_position[2] -= 0.107
     np.testing.assert_allclose(
@@ -321,7 +349,11 @@ def test_reset_clears_trajectory_and_exposes_summary(monkeypatch: Any) -> None:
     module = _import_libero_simulator(monkeypatch)
     env = _bare_env(module)
     env.record_planned_joint_trajectory(np.zeros((2, 7)))
-    env._step_once = lambda: None
+    def settle_once() -> None:
+        env._sim_step_count += 1
+        env.handle.env.sim.data.xpos[1] = np.array([0.2, 0.1, 0.3])
+
+    env._step_once = settle_once
     env.get_observation = lambda: {"trajectory": env.trajectory_summary()}
 
     observation, info = env.reset(seed=11)
@@ -331,6 +363,27 @@ def test_reset_clears_trajectory_and_exposes_summary(monkeypatch: Any) -> None:
     assert info["trajectory"]["num_samples"] == 0
     assert info["task_prompt"] == "move the arm"
     assert env.trajectory_snapshot().metadata["seed"] == 11
+    assert env._sim_step_count == 0
+    np.testing.assert_allclose(env.gripper_link_wxyz_xyz[-3:], [0.2, 0.1, 0.3])
+
+
+def test_planning_failure_is_visible_without_inventing_path(monkeypatch: Any) -> None:
+    module = _import_libero_simulator(monkeypatch)
+    env = _bare_env(module)
+
+    plan_id = env.record_planning_failure(
+        source="curobo_grasp",
+        metadata={"object_name": "mug", "reported_success": False},
+    )
+
+    artifact = env.trajectory_snapshot()
+    assert plan_id == 0
+    assert artifact.samples_for("planned") == ()
+    failed = artifact.samples_for("raw")
+    assert len(failed) == 1
+    assert failed[0].metadata["segment_id"] == "plan-0"
+    assert failed[0].metadata["outcome"] == "planning_failed"
+    assert failed[0].feasibility.planner_success is False
 
 
 def test_close_releases_renderer_server_and_simulator_once(monkeypatch: Any) -> None:

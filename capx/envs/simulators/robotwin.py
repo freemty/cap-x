@@ -39,6 +39,7 @@ class RoboTwinEnv(BaseEnv):
         viser_debug: bool = False,
         video_stride: int = 8,
         trajectory_max_samples_per_layer: int = 10_000,
+        trajectory_render_every_physics_steps: int = 50,
     ) -> None:
         super().__init__()
         root_value = robotwin_root or os.environ.get("ROBOTWIN_ROOT")
@@ -77,6 +78,7 @@ class RoboTwinEnv(BaseEnv):
         self._trajectory = RoboTwinTrajectoryInstrumentation(
             metadata=self._trajectory_metadata(seed=self.seed),
             max_samples_per_layer=trajectory_max_samples_per_layer,
+            render_every_physics_steps=trajectory_render_every_physics_steps,
         )
         self.viser_server: Any | None = None
         self._trajectory_renderer_attempted = False

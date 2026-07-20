@@ -902,6 +902,19 @@ class FrankaLiberoApi(ApiBase):
                     ),
                 },
             )
+        elif not (success and joint_traj is not None):
+            record_failure = getattr(self._env, "record_planning_failure", None)
+            if callable(record_failure):
+                record_failure(
+                    source="curobo_grasp",
+                    metadata={
+                        "object_name": object_name,
+                        "reported_success": bool(success),
+                        "goalset_index": (
+                            int(goalset_idx) if goalset_idx is not None else None
+                        ),
+                    },
+                )
         return success, joint_traj, goalset_idx
 
     def execute_joint_trajectory(
@@ -1085,4 +1098,14 @@ class FrankaLiberoApi(ApiBase):
                 source="curobo_grasped_object",
                 metadata={"object_name": object_name},
             )
+        elif not (success and joint_traj is not None):
+            record_failure = getattr(self._env, "record_planning_failure", None)
+            if callable(record_failure):
+                record_failure(
+                    source="curobo_grasped_object",
+                    metadata={
+                        "object_name": object_name,
+                        "reported_success": bool(success),
+                    },
+                )
         return success, joint_traj

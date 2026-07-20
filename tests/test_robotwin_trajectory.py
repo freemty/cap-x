@@ -382,6 +382,13 @@ def test_native_dense_action_records_dual_arm_control_layers_and_real_state(
     )
     assert final_drive.arm_state("left").metadata["state_source"] == "drive_target"
     assert final_real.arm_state("left").metadata["state_source"] == "real_qpos"
+    assert {sample.metadata["segment_id"] for sample in planned_samples} == {"plan-0"}
+    assert {
+        sample.metadata["segment_id"]
+        for sample in commanded_samples
+        if sample.metadata.get("source") == "drive_target"
+    } == {"initial", "plan-0"}
+    assert planned_samples[0].feasibility.planner_success is True
 
     summary = instrumented_env.trajectory_summary()
     assert "samples" not in summary
@@ -392,6 +399,33 @@ def test_native_dense_action_records_dual_arm_control_layers_and_real_state(
         "executed": 3,
     }
     assert summary["arms"] == ["left", "right"]
+
+
+def test_live_renderer_updates_at_bounded_physics_stride(
+    instrumented_env: RoboTwinEnv,
+) -> None:
+    instrumented_env.reset(seed=5)
+    task = NativeFakeTask.instances[-1]
+
+    class FakeRenderer:
+        def __init__(self) -> None:
+            self.update_count = 0
+
+        def update(self) -> None:
+            self.update_count += 1
+
+        def close(self) -> None:
+            pass
+
+    renderer = FakeRenderer()
+    instrumented_env._trajectory.renderer = renderer
+    instrumented_env._trajectory._render_every_physics_steps = 2
+
+    task.scene.step()
+    assert renderer.update_count == 0
+    task.scene.step()
+    assert renderer.update_count == 1
+    assert instrumented_env.trajectory_summary()["layers"]["executed"] == 3
 
 
 def test_close_restores_every_native_instance_monkeypatch(
