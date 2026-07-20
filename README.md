@@ -20,6 +20,11 @@ Shankar Sastry<sup>2</sup>, Yuke Zhu<sup>1</sup>, Ken Goldberg<sup>&dagger;,2</s
 ---
 **CaP-X** is an open-access framework for systematically studying Code-as-Policy agents in robot manipulation. It consists of four components:
 
+Cross-system experiments, PhysicalAgent comparisons, research takeaways, and
+aggregate visualizations are maintained in the separate
+[Agent as Policy](https://github.com/freemty/agent-as-policy) control-plane
+repository. This repository contains the CaP-X runtime and its native tools.
+
 
 | Component      | What it does                                                                                                                                                                                   |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -197,7 +202,6 @@ uv run --no-sync --active capx/envs/launch.py \
 | [Development](docs/development.md) | Testing, linting, LIBERO/GraspNet setup, checkpoints, known issues |
 | [Real-World Franka Panda Bringup](docs/real-franka.md) | Bringup with robots_realtime, real-robot QuickStart |
 | [RL Training](docs/rl-training.md) | CaP-RL with GRPO/VeRL, sim-to-real transfer |
-| [PhysicalAgent, CaP-X, and Guava Comparison](docs/physicalagent-comparison.md) | Three-way tool abstraction, no-VLA oracle semantics, privilege boundaries, and clean evaluation requirements |
 | [Skill Library Compilation](scripts/skill_library_compilation/README.md) | Analyze eval outputs, compile reusable skill libraries |
 
 ---

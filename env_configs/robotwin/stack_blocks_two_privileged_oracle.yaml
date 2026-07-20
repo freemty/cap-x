@@ -51,7 +51,7 @@ env:
       RESULT = get_task_status()
 
 record_video: true
-output_dir: ./outputs/exp01b/robotwin
+output_dir: ./outputs/robotwin/stack_blocks_two_privileged_oracle
 use_oracle_code: true
 trials: 1
 num_workers: 1

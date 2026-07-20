@@ -242,8 +242,7 @@ Run the focused local regression and Web build with:
   tests/test_robotwin_trajectory.py \
   tests/test_robotwin_adapter.py \
   tests/test_web_visualization.py \
-  tests/test_trajectory_artifact_saving.py \
-  viewer/tests/test_viewer.py
+  tests/test_trajectory_artifact_saving.py
 npm --prefix web-ui run build
 ```
 

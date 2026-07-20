@@ -25,9 +25,10 @@ verified:
 | `openrouter_chat` | Pass through the shared Chat Completions contract | Local provider endpoint reached `401` | Not currently verified |
 | `capx_local_chat` | Pass when a local proxy is running | Relay `/health` and remote tunnel were verified | Depends on the selected upstream |
 
-The LIBERO and RoboTwin oracle results in `exp01b` are real simulator/API
-executions, but they deliberately bypass external model generation and therefore
-do not count as LLM API success.
+The archived LIBERO and RoboTwin oracle integration results are real
+simulator/API executions, but they deliberately bypass external model
+generation and therefore do not count as LLM API success. Their experiment
+records now live in the Agent as Policy control-plane repository.
 
 ## Prerequisites
 
@@ -108,10 +109,10 @@ CAPX_LLM_MODEL=glm-5.2 \
 ./scripts/test_llm_apis.sh --provider capx_local_chat
 ```
 
-For exp00a, the simulator host cannot reach BigModel directly. Start the local
+When an outer benchmark worker cannot reach BigModel directly, start the local
 GLM relay and expose it with the reverse tunnel documented in
 [`docs/configuration.md`](../configuration.md), then run the local-endpoint test
-before starting the 180-task evaluation.
+before starting the evaluation.
 
 ## Results
 
