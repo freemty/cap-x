@@ -110,8 +110,82 @@ OpenRouter provides access to Gemini, GPT, Claude, DeepSeek, Qwen, and other mod
 uv run python -m capx.serving.vllm_server --model Qwen/Qwen2.5-Coder-7B-Instruct --port 8080 --tensor-parallel-size 4
 ```
 
-### Option C: Custom providers
+### Option C: OpenAI Responses API
+
+CaP-X's evaluation interface remains `/chat/completions`. For an upstream that
+uses the Responses API, start the compatibility proxy with the credential in an
+environment variable:
+
+```bash
+export UPSTREAM_API_KEY="..."
+uv run python -m capx.serving.responses_proxy \
+    --upstream-url https://api.openai.com/v1/responses \
+    --host 127.0.0.1 \
+    --port 8110
+```
+
+Then use the normal CaP-X launch interface:
+
+```bash
+uv run --no-sync --active capx/envs/launch.py \
+    --config-path <config.yaml> \
+    --model gpt-5.5 \
+    --server-url http://127.0.0.1:8110/chat/completions \
+    --reasoning-effort medium
+```
+
+The proxy converts message content, `reasoning_effort`, and output-token limits
+to Responses fields, then returns the generated text in the Chat Completions
+shape expected by CaP-X. Credentials are read only from the named environment
+variable and must not be committed.
+
+### Option D: Zhipu GLM-5.2
+
+CaP-X can call GLM-5.2 through Zhipu's OpenAI-compatible Chat Completions API.
+Keep the credential out of command-line arguments. Either export it as
+`GLM_API_KEY`, or save it in the git-ignored `.glmkey` file with mode `0600`:
+
+```bash
+chmod 600 .glmkey
+uv run python -m capx.serving.chat_completions_proxy \
+    --upstream-url https://open.bigmodel.cn/api/coding/paas/v4/chat/completions \
+    --api-key-file .glmkey \
+    --host 127.0.0.1 \
+    --port 18110
+```
+
+Expose that local relay to a simulator host that cannot reach BigModel directly:
+
+```bash
+ssh -N -R 127.0.0.1:8110:127.0.0.1:18110 xdlab23_yang
+```
+
+Then launch CaP-X with `--model glm-5.2`,
+`--server-url http://127.0.0.1:8110/chat/completions`, and
+`--reasoning-effort max`. The client sends GLM's `thinking` and
+`reasoning_effort` fields and reads credentials from `GLM_API_KEY` when called
+directly.
+
+The endpoint above is for GLM Coding Plan credentials. Use it only where the
+subscription's supported-tool policy permits the caller. For a regular BigModel
+API key, set the upstream URL to
+`https://open.bigmodel.cn/api/paas/v4/chat/completions` instead.
+
+### Option E: Custom providers
 
 Providers live under `capx/serving/providers/` and implement a simple `generate_code` method. Extend to Gemini/Claude/Bedrock by adding new provider classes.
 
 > **Note:** `.openrouterkey` is git-ignored. Never commit API keys to the repository.
+
+### Reusable provider smoke tests
+
+Run the offline contracts and every currently configured live provider with one
+command:
+
+```bash
+./scripts/test_llm_apis.sh
+```
+
+Missing credentials are skipped; configured providers must return the marker
+`CAPX_API_OK`. See [LLM API smoke tests](guides/llm-api-smoke.md) for profiles,
+credential locations, strict CI behavior, and the current verification matrix.

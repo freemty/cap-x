@@ -26,9 +26,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 GPT_MODELS = [
+    "gpt-5.5",
     "openai/gpt-5.4",
     "openai/o4-mini",
 ]
+GLM_MODELS = ["glm-5.2"]
 VLM_MODELS = [
     "google/gemini-3.1-pro-preview",
     "google/gemini-2.5-flash-lite",
@@ -207,6 +209,15 @@ def query_model(args: "LaunchArgs | ModelQueryArgs", prompt: list[dict]) -> str:
                 "max_completion_tokens": args.max_tokens,  # Total completion tokens = reasoning + output tokens
                 "messages": prompt,
             }
+    elif args.model in GLM_MODELS:
+        payload = {
+            "model": args.model,
+            "messages": prompt,
+            "temperature": args.temperature,
+            "max_tokens": args.max_tokens,
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": args.reasoning_effort,
+        }
     elif is_openrouter_model(args.model):
         payload = {
             "model": args.model,
@@ -239,6 +250,8 @@ def query_model(args: "LaunchArgs | ModelQueryArgs", prompt: list[dict]) -> str:
     headers = {"Content-Type": "application/json"}
     if args.api_key:
         headers["Authorization"] = f"Bearer {args.api_key}"
+    elif os.getenv("GLM_API_KEY") is not None and args.model in GLM_MODELS:
+        headers["Authorization"] = f"Bearer {os.getenv('GLM_API_KEY')}"
     elif os.getenv("OPENAI_API_KEY") is not None and args.model in GPT_MODELS:
         headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
     start_time = time.time()
@@ -272,7 +285,8 @@ def query_model(args: "LaunchArgs | ModelQueryArgs", prompt: list[dict]) -> str:
     except (KeyError, IndexError) as exc:
         raise RuntimeError(f"Unexpected response format: {body}") from exc
     if body.get("choices") is not None:
-        out["reasoning"] = body.get("choices")[0].get("message").get("reasoning", None)
+        message = body["choices"][0].get("message", {})
+        out["reasoning"] = message.get("reasoning") or message.get("reasoning_content")
     else:
         out["reasoning"] = None
     return out  # type: ignore[return-value]
@@ -304,6 +318,16 @@ def query_model_streaming(
             "messages": prompt,
             "stream": True,
         }
+    elif args.model in GLM_MODELS:
+        payload = {
+            "model": args.model,
+            "messages": prompt,
+            "temperature": args.temperature,
+            "max_tokens": args.max_tokens,
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": args.reasoning_effort,
+            "stream": True,
+        }
     elif args.model in CLAUDE_MODELS:
         payload = {
             "model": args.model,
@@ -325,6 +349,8 @@ def query_model_streaming(
     headers = {"Content-Type": "application/json"}
     if args.api_key:
         headers["Authorization"] = f"Bearer {args.api_key}"
+    elif os.getenv("GLM_API_KEY") is not None and args.model in GLM_MODELS:
+        headers["Authorization"] = f"Bearer {os.getenv('GLM_API_KEY')}"
     elif os.getenv("OPENAI_API_KEY") is not None and args.model in GPT_MODELS:
         headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY')}"
 
