@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from capx.visualization.replay import build_parser
+from capx.visualization.replay import build_parser, _joint_configuration_for_urdf
 from capx.visualization.trajectory import (
     ArmState,
     EndEffectorPose,
@@ -24,8 +24,18 @@ from capx.visualization.trajectory import (
 from capx.visualization.viser_trajectory import ViserTrajectoryRenderer
 
 
-def pose(x: float, y: float = 0.0, z: float = 0.2) -> EndEffectorPose:
-    return EndEffectorPose(position=(x, y, z), wxyz=(2.0, 0.0, 0.0, 0.0))
+def pose(
+    x: float,
+    y: float = 0.0,
+    z: float = 0.2,
+    *,
+    frame_id: str = "world",
+) -> EndEffectorPose:
+    return EndEffectorPose(
+        position=(x, y, z),
+        wxyz=(2.0, 0.0, 0.0, 0.0),
+        frame_id=frame_id,
+    )
 
 
 def arm_state(
@@ -79,6 +89,7 @@ def test_record_layers_summary_and_metadata_only_raw_sample() -> None:
         "executed": 1,
     }
     assert summary["arms"] == ["left", "right"]
+    assert summary["frames"] == ["world"]
     assert summary["feasibility"]["collision_free"] == {
         "true": 0,
         "false": 1,
@@ -129,9 +140,28 @@ def test_artifact_json_round_trip(tmp_path: Path) -> None:
 
     restored = TrajectoryArtifact.load_json(path)
     assert restored.to_dict() == recorder.snapshot().to_dict()
+    assert restored.samples[0].arm_state("left").ee_pose.frame_id == "world"
     assert TrajectoryArtifact.loads(restored.dumps()).to_dict() == restored.to_dict()
     assert restored.samples_for(layer="planned", arm="left", through_step=8)
     assert restored.samples_for(layer="executed") == ()
+
+    legacy_data = restored.to_dict()
+    del legacy_data["samples"][0]["arms"][0]["ee_pose"]["frame_id"]
+    migrated = TrajectoryArtifact.from_dict(legacy_data)
+    assert migrated.samples[0].arm_state("left").ee_pose.frame_id == "world"
+
+    legacy_data["metadata"]["simulator"] = "libero"
+    migrated_libero = TrajectoryArtifact.from_dict(legacy_data)
+    assert (
+        migrated_libero.samples[0].arm_state("left").ee_pose.frame_id
+        == "robot0_base"
+    )
+    legacy_data["metadata"]["eef_frame_id"] = "panda_link0"
+    configured_frame = TrajectoryArtifact.from_dict(legacy_data)
+    assert (
+        configured_frame.samples[0].arm_state("left").ee_pose.frame_id
+        == "panda_link0"
+    )
 
 
 def test_end_effector_pose_frame_round_trip_and_legacy_default() -> None:
@@ -286,6 +316,9 @@ def test_renderer_batches_paths_axes_timeline_and_feasibility_colors() -> None:
     assert np.all(executed_line[2]["colors"] == np.array([225, 45, 45]))
     assert robot_states[-1].joint_positions == (0.08, -0.08)
     assert "Flagged infeasible:** 1" in renderer.status_handle.content
+    assert "Frame:** world" in renderer.status_handle.content
+    assert "Planner:** unknown" in renderer.status_handle.content
+    assert "Task:** unknown" in renderer.status_handle.content
 
     replacement_states: list[ArmState] = []
     renderer.set_robot_state_setter("left", replacement_states.append)
@@ -337,6 +370,175 @@ def test_live_renderer_subscribes_and_close_unsubscribes() -> None:
     assert len(server.scene.calls) == calls_after_close
 
 
+def test_renderer_breaks_plan_segments_and_does_not_connect_raw_targets() -> None:
+    recorder = TrajectoryRecorder(max_samples_per_layer=16)
+    for step, x in enumerate((0.0, 1.0)):
+        recorder.append_planned(
+            step=step,
+            arms={"left": ArmState(ee_pose=pose(x))},
+            metadata={"plan_id": "plan-a"},
+        )
+    for step, x in enumerate((100.0, 101.0), start=2):
+        recorder.append_planned(
+            step=step,
+            arms={"left": ArmState(ee_pose=pose(x))},
+            metadata={"plan_id": "plan-b"},
+        )
+    for step, x in enumerate((10.0, 20.0)):
+        recorder.append_raw(step=step, arms={"left": ArmState(ee_pose=pose(x))})
+
+    server = FakeServer()
+    ViserTrajectoryRenderer(server, source=recorder.snapshot())
+    planned_lines = [
+        call
+        for call in server.scene.calls
+        if call[0] == "line" and "/planned/" in call[1]
+    ]
+    raw_lines = [
+        call for call in server.scene.calls if call[0] == "line" and "/raw/" in call[1]
+    ]
+    raw_axes = [
+        call for call in server.scene.calls if call[0] == "axes" and "/raw/" in call[1]
+    ]
+
+    assert len(planned_lines) == 2
+    assert all(call[2]["points"].shape == (1, 2, 3) for call in planned_lines)
+    assert all(np.max(np.abs(np.diff(call[2]["points"], axis=1))) <= 1.0 for call in planned_lines)
+    assert raw_lines == []
+    assert len(raw_axes) == 1
+
+
+def test_segment_id_takes_priority_over_plan_id() -> None:
+    recorder = TrajectoryRecorder(max_samples_per_layer=8)
+    for step in range(3):
+        recorder.append_commanded(
+            step=step,
+            arms={"left": ArmState(ee_pose=pose(float(step)))},
+            metadata={"segment_id": "motion-1", "plan_id": f"plan-{step}"},
+        )
+    server = FakeServer()
+    ViserTrajectoryRenderer(server, source=recorder.snapshot())
+    lines = [
+        call
+        for call in server.scene.calls
+        if call[0] == "line" and "/commanded/" in call[1]
+    ]
+    assert len(lines) == 1
+    assert lines[0][2]["points"].shape == (2, 2, 3)
+
+
+def test_renderer_never_overlays_different_pose_frames() -> None:
+    recorder = TrajectoryRecorder(max_samples_per_layer=8)
+    for step, x in enumerate((0.0, 1.0)):
+        recorder.append_executed(
+            step=step,
+            arms={"left": ArmState(ee_pose=pose(x, frame_id="world"))},
+        )
+    for step, x in enumerate((100.0, 101.0), start=2):
+        recorder.append_executed(
+            step=step,
+            arms={"left": ArmState(ee_pose=pose(x, frame_id="robot_base"))},
+        )
+
+    server = FakeServer()
+    renderer = ViserTrajectoryRenderer(server, source=recorder.snapshot())
+    assert renderer._active_frame_id == "world"
+    assert all("/world/" in key for key in renderer._scene_handles)
+    assert "Frame:** world (hidden: robot_base)" in renderer.status_handle.content
+
+    renderer.set_frame_id("robot_base")
+    assert renderer._active_frame_id == "robot_base"
+    assert all("/robot_base/" in key for key in renderer._scene_handles)
+    base_line = [
+        call
+        for call in server.scene.calls
+        if call[0] == "line" and "/robot_base/" in call[1]
+    ][-1]
+    assert float(base_line[2]["points"].min()) >= 0.0
+    assert float(base_line[2]["points"][0, :, 0].min()) >= 100.0
+    assert "hidden: world" in renderer.status_handle.content
+
+    renderer.set_frame_id("missing_frame")
+    assert renderer._active_frame_id == "missing_frame"
+    assert renderer._scene_handles == {}
+    assert "missing_frame (not present; available: robot_base, world)" in (
+        renderer.status_handle.content
+    )
+
+
+def test_renderer_status_shows_latest_completion_and_tracking_metrics() -> None:
+    recorder = TrajectoryRecorder(max_samples_per_layer=8)
+    recorder.append_executed(
+        step=0,
+        arms={"left": ArmState(ee_pose=pose(0.0))},
+        feasibility=FeasibilityMetrics(
+            planner_success=True,
+            task_success=False,
+            tracking_error_m=0.04,
+        ),
+    )
+    recorder.append_executed(
+        step=1,
+        arms={"left": ArmState(ee_pose=pose(0.1))},
+        feasibility=FeasibilityMetrics(
+            planner_success=False,
+            task_success=True,
+            tracking_error_m=0.01,
+        ),
+    )
+    recorder.append_executed(
+        step=2,
+        arms={"left": ArmState(ee_pose=pose(0.2))},
+        feasibility=FeasibilityMetrics(tracking_error_m=0.02),
+    )
+    server = FakeServer()
+    renderer = ViserTrajectoryRenderer(server, source=recorder.snapshot())
+
+    assert "Planner:** failed" in renderer.status_handle.content
+    assert "Task:** success" in renderer.status_handle.content
+    assert "Tracking error:** latest 0.0200 m / max 0.0400 m" in (
+        renderer.status_handle.content
+    )
+
+    renderer.set_timestep(0)
+    assert "Planner:** success" in renderer.status_handle.content
+    assert "Task:** incomplete" in renderer.status_handle.content
+    assert "Tracking error:** latest 0.0400 m / max 0.0400 m" in (
+        renderer.status_handle.content
+    )
+
+
+def test_replay_joint_mapping_is_strict_and_supports_libero_panda_aliases() -> None:
+    robot0_names = tuple(f"robot0_joint{index}" for index in range(1, 8))
+    panda_names = tuple(f"panda_joint{index}" for index in range(1, 8))
+    state = ArmState(joint_names=robot0_names, joint_positions=tuple(range(1, 8)))
+
+    np.testing.assert_array_equal(
+        _joint_configuration_for_urdf(state, panda_names),
+        np.arange(1, 8),
+    )
+    np.testing.assert_array_equal(
+        _joint_configuration_for_urdf(state, tuple(reversed(panda_names))),
+        np.arange(7, 0, -1),
+    )
+
+    exact_state = ArmState(
+        joint_names=("shoulder", "elbow"), joint_positions=(0.2, 0.7)
+    )
+    np.testing.assert_array_equal(
+        _joint_configuration_for_urdf(exact_state, ("elbow", "shoulder")),
+        np.asarray([0.7, 0.2]),
+    )
+
+    unknown_aliases = tuple(f"other_joint{index}" for index in range(1, 8))
+    assert _joint_configuration_for_urdf(state, unknown_aliases) is None
+    assert _joint_configuration_for_urdf(state, panda_names + ("finger",)) is None
+    short_state = ArmState(
+        joint_names=robot0_names[:6], joint_positions=tuple(range(1, 7))
+    )
+    assert _joint_configuration_for_urdf(short_state, panda_names[:6]) is None
+
+
 def test_replay_cli_parser() -> None:
     args = build_parser().parse_args(
         ["episode.json", "--host", "127.0.0.1", "--port", "9090", "--urdf", "robot.urdf"]
@@ -351,6 +553,7 @@ def test_replay_cli_parser() -> None:
     ("constructor", "match"),
     [
         (lambda: EndEffectorPose((0, 0, 0), (0, 0, 0, 0)), "non-zero norm"),
+        (lambda: EndEffectorPose((0, 0, 0), (1, 0, 0, 0), ""), "frame_id"),
         (
             lambda: ArmState(joint_names=("a",), joint_positions=()),
             "equal length",

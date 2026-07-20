@@ -371,6 +371,11 @@ class SessionManager:
                 finally:
                     if close_task.done():
                         await asyncio.gather(close_task, return_exceptions=True)
+                    elif released:
+                        # interrupt_owner_call observed the underlying executor
+                        # future finish; let the small wrapper task consume it
+                        # before clearing session bookkeeping.
+                        await asyncio.gather(close_task, return_exceptions=True)
                     elif not released:
                         close_task.cancel()
                         await asyncio.gather(close_task, return_exceptions=True)

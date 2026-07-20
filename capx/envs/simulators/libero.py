@@ -230,6 +230,17 @@ class FrankaLiberoEnv(BaseEnv):
         """Return an immutable snapshot for saving or offline replay."""
         return self.trajectory_recorder.snapshot()
 
+    def _trajectory_task_success(self) -> bool | None:
+        """Read the simulator task predicate without making recording brittle."""
+
+        check_success = getattr(getattr(self.handle, "env", None), "check_success", None)
+        if not callable(check_success):
+            return None
+        try:
+            return bool(check_success())
+        except Exception:
+            return None
+
     def _read_panda_joint_positions(self) -> np.ndarray:
         return np.asarray(
             self.handle.env.sim.data.qpos[self._panda_joint_qpos_addrs],
@@ -623,7 +634,10 @@ class FrankaLiberoEnv(BaseEnv):
                 step=self._sim_step_count,
                 timestamp_s=self.get_current_time_s(),
                 arms={"panda": executed_state},
-                feasibility=FeasibilityMetrics(tracking_error_m=tracking_error_m),
+                feasibility=FeasibilityMetrics(
+                    tracking_error_m=tracking_error_m,
+                    task_success=self._trajectory_task_success(),
+                ),
                 metadata={
                     "controller": "JOINT_POSITION",
                     "segment_id": segment_id,
@@ -701,6 +715,9 @@ class FrankaLiberoEnv(BaseEnv):
                     include_ee_pose=True,
                 )
             },
+            feasibility=FeasibilityMetrics(
+                task_success=self._trajectory_task_success(),
+            ),
             metadata={
                 "controller": "JOINT_POSITION_GRIPPER_HOLD",
                 "segment_id": getattr(

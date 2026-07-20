@@ -24,10 +24,7 @@ LOGGER = logging.getLogger(__name__)
 _CANONICAL_PANDA_JOINTS = tuple(f"panda_joint{index}" for index in range(1, 8))
 _PANDA_JOINT_ALIASES = {
     **{name: name for name in _CANONICAL_PANDA_JOINTS},
-    **{
-        f"robot0_joint{index}": f"panda_joint{index}"
-        for index in range(1, 8)
-    },
+    **{f"robot0_joint{index}": f"panda_joint{index}" for index in range(1, 8)},
 }
 
 
@@ -93,9 +90,7 @@ def _joint_configuration_for_urdf(
     if canonical_source is None or canonical_target is None:
         return None
     by_canonical_name = dict(zip(canonical_source, values, strict=True))
-    return np.asarray(
-        [by_canonical_name[name] for name in canonical_target], dtype=float
-    )
+    return np.asarray([by_canonical_name[name] for name in canonical_target], dtype=float)
 
 
 def _make_urdf_setter(server: Any, urdf_path: Path) -> tuple[Any, Any]:

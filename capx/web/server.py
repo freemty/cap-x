@@ -8,7 +8,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
-from urllib.request import urlopen, Request as UrlRequest
 
 import tyro
 import uvicorn
@@ -20,7 +19,6 @@ from fastapi.staticfiles import StaticFiles
 
 from capx.envs.configs.instantiate import instantiate
 from capx.utils.launch_utils import _load_config
-from capx.web.async_trial_runner import LaunchArgsCompat, run_trial_async
 from capx.web.models import (
     ConfigListResponse,
     InjectPromptCommand,
@@ -36,7 +34,11 @@ from capx.web.models import (
     StopTrialResponse,
 )
 from capx.web.session_manager import Session, get_session_manager
-from capx.web.visualization import DEFAULT_VISER_PORTS, probe_viser_port
+from capx.web.visualization import (
+    DEFAULT_VISER_PORTS,
+    fetch_viser_http,
+    probe_viser_port,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,8 +64,14 @@ def _find_viser_port(preferred: int | None = None) -> int | None:
 
 def _active_viser_port() -> int | None:
     session = get_session_manager().get_active_session()
-    preferred = session.viser_port if session is not None else None
-    return _find_viser_port(preferred)
+    if session is not None:
+        # A live session owns the visualization namespace.  ``None`` means its
+        # server has not started (or is unavailable), not permission to attach
+        # an unrelated/stale Viser process from the legacy fallback range.
+        if session.viser_port is None:
+            return None
+        return _find_viser_port(session.viser_port)
+    return _find_viser_port()
 
 
 def create_app() -> FastAPI:
@@ -249,6 +257,8 @@ def create_app() -> FastAPI:
             session.state = SessionState.LOADING_CONFIG
 
             # Build launch args for trial runner
+            from capx.web.async_trial_runner import LaunchArgsCompat, run_trial_async
+
             trial_args = LaunchArgsCompat(
                 model=request.model,
                 server_url=request.server_url,
@@ -424,7 +434,12 @@ def create_app() -> FastAPI:
     # Viser reverse proxy  (avoids port-forwarding issues)
     # ========================================================================
 
-    async def _proxy_viser_http(path: str = "", query: str = "") -> Response:
+    async def _proxy_viser_http(
+        path: str = "",
+        query: str = "",
+        *,
+        include_body: bool = True,
+    ) -> Response:
         """Forward an HTTP request to the local Viser server."""
         port = await asyncio.to_thread(_active_viser_port)
         if port is None:
@@ -436,25 +451,35 @@ def create_app() -> FastAPI:
         if query:
             url += f"?{query}"
         try:
-            req = UrlRequest(url)
-            resp = await asyncio.to_thread(urlopen, req, None, 5)
-            content = await asyncio.to_thread(resp.read)
-            content_type = resp.headers.get(
-                "Content-Type", "application/octet-stream"
+            status, content, content_type, content_length = await asyncio.to_thread(
+                fetch_viser_http,
+                url,
+                include_body=include_body,
             )
-            return Response(content=content, media_type=content_type)
+            headers = {"Content-Type": content_type}
+            if content_length is not None:
+                headers["Content-Length"] = content_length
+            return Response(content=content, status_code=status, headers=headers)
         except Exception as exc:
             return Response(content=f"Proxy error: {exc}", status_code=502)
 
     @app.api_route("/viser-proxy", methods=["GET", "HEAD"])
     async def proxy_viser_root(request: Request):
         """Proxy the Viser root page (no trailing slash)."""
-        return await _proxy_viser_http("", str(request.url.query))
+        return await _proxy_viser_http(
+            "",
+            str(request.url.query),
+            include_body=request.method != "HEAD",
+        )
 
     @app.api_route("/viser-proxy/{path:path}", methods=["GET", "HEAD"])
     async def proxy_viser_path(request: Request, path: str):
         """Proxy Viser sub-paths (assets, hdri, etc.)."""
-        return await _proxy_viser_http(path, str(request.url.query))
+        return await _proxy_viser_http(
+            path,
+            str(request.url.query),
+            include_body=request.method != "HEAD",
+        )
 
     @app.websocket("/viser-proxy")
     async def proxy_viser_ws(websocket: WebSocket):

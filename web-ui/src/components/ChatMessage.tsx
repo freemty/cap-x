@@ -23,15 +23,24 @@ function TrajectoryStatus({ trajectory }: { trajectory?: Record<string, unknown>
     ? trajectory.arms.filter((arm): arm is string => typeof arm === 'string')
     : [];
 
-  let failedChecks = 0;
-  if (trajectory.feasibility && typeof trajectory.feasibility === 'object') {
-    for (const metric of Object.values(trajectory.feasibility as Record<string, unknown>)) {
-      if (metric && typeof metric === 'object') {
-        const failed = (metric as Record<string, unknown>).false;
-        if (typeof failed === 'number') failedChecks += failed;
-      }
-    }
-  }
+  const feasibility = trajectory.feasibility && typeof trajectory.feasibility === 'object'
+    ? trajectory.feasibility as Record<string, unknown>
+    : {};
+  const metricCounts = (name: string) => {
+    const metric = feasibility[name];
+    if (!metric || typeof metric !== 'object') return { passed: 0, failed: 0 };
+    const counts = metric as Record<string, unknown>;
+    return {
+      passed: typeof counts.true === 'number' ? counts.true : 0,
+      failed: typeof counts.false === 'number' ? counts.false : 0,
+    };
+  };
+  // task_success=false is the normal state before the final placement, not a
+  // feasibility failure. Count only checks that can invalidate a trajectory.
+  const failedChecks = ['ik_ok', 'joint_limit_ok', 'collision_free', 'planner_success']
+    .reduce((total, name) => total + metricCounts(name).failed, 0);
+  const planner = metricCounts('planner_success');
+  const task = metricCounts('task_success');
 
   return (
     <div className="mt-3 rounded-md border border-surface-border bg-surface-sunken/50 px-3 py-2 text-xs">
@@ -42,6 +51,12 @@ function TrajectoryStatus({ trajectory }: { trajectory?: Record<string, unknown>
         <span>Executed <strong className="text-nv-green">{count('executed')}</strong></span>
         {count('raw') > 0 && <span>Raw <strong className="text-text-primary">{count('raw')}</strong></span>}
         {arms.length > 0 && <span>Arms <strong className="text-text-primary">{arms.join(', ')}</strong></span>}
+        {planner.failed > 0
+          ? <span>Planner <strong className="text-red-400">Failed</strong></span>
+          : planner.passed > 0 && <span>Planner <strong className="text-nv-green">Passed</strong></span>}
+        {task.passed > 0
+          ? <span>Task <strong className="text-nv-green">Verified</strong></span>
+          : task.failed > 0 && <span>Task <strong className="text-text-primary">In progress</strong></span>}
         {failedChecks > 0 && <span>Failed checks <strong className="text-red-400">{failedChecks}</strong></span>}
       </div>
     </div>

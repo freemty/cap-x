@@ -7,7 +7,6 @@ import copy
 import gc
 import logging
 import os
-import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -50,8 +49,15 @@ from capx.web.models import (
     WSEventBase,
 )
 from capx.utils import execution_logger
-from capx.web.session_manager import Session, run_blocking_with_interrupt
-from capx.web.visualization import enable_web_visualization, get_viser_port
+from capx.web.session_manager import (
+    Session,
+    interrupt_owner_call,
+    run_on_owner_executor,
+)
+from capx.web.visualization import (
+    enable_web_visualization,
+    reset_render_and_viser_port,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,29 +145,34 @@ async def run_trial_async(
         import concurrent.futures
         env_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="env")
         session.env_executor = env_executor
-        loop = asyncio.get_running_loop()
+        session.env_executor_poisoned = False
 
-        async def run_in_env_thread(func, *args):
-            return await loop.run_in_executor(env_executor, func, *args)
+        async def run_in_env_thread(func, *args, **kwargs):
+            return await run_on_owner_executor(session, func, *args, **kwargs)
 
         logger.info(f"Instantiating environment for session {session.session_id}")
-        env = await run_in_env_thread(instantiate, session.env_factory)
 
-        # Store env reference in session for safety interrupt
-        session.env = env
-        session.viser_port = get_viser_port(env)
-        if session.viser_port is not None:
-            logger.info(
-                "Viser for session %s is listening on port %d",
-                session.session_id,
-                session.viser_port,
-            )
+        def _instantiate_and_register():
+            # Register inside the owner call so cancellation cannot lose an env
+            # that finished construction before its asyncio waiter resumed.
+            created_env = instantiate(session.env_factory)
+            session.env = created_env
+            return created_env
 
-        # Enable web UI logging on all API instances
-        if hasattr(env, "_apis"):
-            for api in env._apis.values():
+        env = await run_in_env_thread(_instantiate_and_register)
+
+        # Enable web UI logging on all API instances, on the same owner thread.
+        def _enable_webui() -> int:
+            apis = getattr(env, "_apis", None)
+            if apis is None:
+                return 0
+            for api in apis.values():
                 api.enable_webui(True)
-            logger.info(f"Enabled web UI logging on {len(env._apis)} API(s)")
+            return len(apis)
+
+        enabled_api_count = await run_in_env_thread(_enable_webui)
+        if enabled_api_count:
+            logger.info("Enabled web UI logging on %d API(s)", enabled_api_count)
 
         # Get prompts from config
         multi_turn_prompt = session.env_factory["cfg"].get("multi_turn_prompt", None)
@@ -173,19 +184,22 @@ async def run_trial_async(
             status="resetting",
             message="Resetting environment...",
         ))
-        # Reset and capture initial frame in the same thread to avoid
-        # MuJoCo OpenGL context issues (osmesa contexts are thread-local).
-        def _reset_and_render():
-            obs, info = env.reset()
-            frame = env.render() if hasattr(env, "render") else None
-            return obs, info, frame
-
-        obs, _, initial_frame = await run_in_env_thread(_reset_and_render)
+        # RoboTwin creates its Viser server during reset, so discover the port
+        # only after reset and on the environment's owner thread.
+        obs, _, initial_frame, session.viser_port = await run_in_env_thread(
+            reset_render_and_viser_port, env
+        )
+        if session.viser_port is not None:
+            logger.info(
+                "Viser for session %s is listening on port %d",
+                session.session_id,
+                session.viser_port,
+            )
         obs["full_prompt"] = copy.deepcopy(obs["full_prompt"])
 
         # Patch LIBERO task language into prompt template
         from capx.envs.trial import _patch_libero_goal
-        _patch_libero_goal(env, obs)
+        await run_in_env_thread(_patch_libero_goal, env, obs)
 
         # Extract the actual (substituted) task prompt for the UI
         actual_task_prompt = None
@@ -206,8 +220,13 @@ async def run_trial_async(
         ))
 
         # Enable video capture if configured
-        if session.config.get("record_video") and hasattr(env, "enable_video_capture"):
-            env.enable_video_capture(True, clear=True)
+        if session.config.get("record_video"):
+            def _enable_video_capture() -> None:
+                enable_capture = getattr(env, "enable_video_capture", None)
+                if callable(enable_capture):
+                    enable_capture(True, clear=True)
+
+            await run_in_env_thread(_enable_video_capture)
 
         # Initialize tracking variables
         raw_code = None
@@ -499,21 +518,29 @@ async def run_trial_async(
                         frame = None
                     return result, frame
 
-                def _step_render_with_interrupt(code):
-                    session.execution_thread_id = threading.get_ident()
-                    try:
-                        return _step_and_render(code)
-                    finally:
-                        session.execution_thread_id = None
-
                 exec_timeout = getattr(session, 'execution_timeout', 180)
+                step_task = asyncio.create_task(
+                    run_in_env_thread(_step_and_render, code)
+                )
                 try:
                     (obs_next, reward, terminated, truncated, info_step), post_step_frame = await asyncio.wait_for(
-                        run_in_env_thread(_step_render_with_interrupt, code),
+                        asyncio.shield(step_task),
                         timeout=exec_timeout,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Code block {code_block_idx} timed out after {exec_timeout}s")
+                    released = await interrupt_owner_call(session)
+                    if not released:
+                        step_task.cancel()
+                        await asyncio.gather(step_task, return_exceptions=True)
+                        raise RuntimeError(
+                            "Execution timed out and the simulator owner thread did not stop; "
+                            "the executor was poisoned and no reset was queued"
+                        )
+                    # Consume the task outcome after the retained executor call
+                    # has unwound; its result is intentionally discarded because
+                    # the user-visible outcome remains a timeout.
+                    await asyncio.gather(step_task, return_exceptions=True)
                     await emit(CodeExecutionResultEvent(
                         session_id=session.session_id,
                         block_index=code_block_idx,
@@ -524,9 +551,12 @@ async def run_trial_async(
                         task_completed=False,
                         plan_success=False,
                     ))
-                    # Reset env for next attempt
+                    # The worker is known to be idle, so reset cannot be trapped
+                    # behind the timed-out step.
                     try:
-                        obs, _ = await run_in_env_thread(lambda: env.reset())
+                        obs, _, _, session.viser_port = await run_in_env_thread(
+                            reset_render_and_viser_port, env
+                        )
                     except Exception:
                         pass
                     break  # Exit code block loop, go to multi-turn decision
@@ -860,12 +890,14 @@ async def run_trial_async(
         output_dir = session.config.get("output_dir")
         if output_dir:
             trajectory_artifact = None
-            trajectory_snapshot = getattr(env, "trajectory_snapshot", None)
-            if callable(trajectory_snapshot):
-                try:
-                    trajectory_artifact = await run_in_env_thread(trajectory_snapshot)
-                except Exception as exc:
-                    logger.warning("Failed to snapshot trajectory: %s", exc)
+            def _trajectory_snapshot():
+                snapshot = getattr(env, "trajectory_snapshot", None)
+                return snapshot() if callable(snapshot) else None
+
+            try:
+                trajectory_artifact = await run_in_env_thread(_trajectory_snapshot)
+            except Exception as exc:
+                logger.warning("Failed to snapshot trajectory: %s", exc)
             logger.info(f"Saving trial artifacts to: {output_dir}")
             code_path = await asyncio.to_thread(
                 _save_trial_artifacts,
@@ -893,8 +925,12 @@ async def run_trial_async(
                 logger.info(f"Saved {len(all_exec_histories)} execution histories to: {exec_history_dir}")
 
             # Save video if configured
-            if session.config.get("record_video") and hasattr(env, "get_video_frames"):
-                frames = env.get_video_frames(clear=True)
+            if session.config.get("record_video"):
+                def _get_video_frames():
+                    get_frames = getattr(env, "get_video_frames", None)
+                    return get_frames(clear=True) if callable(get_frames) else None
+
+                frames = await run_in_env_thread(_get_video_frames)
                 if frames:
                     video_dir = os.path.join(
                         output_dir,

@@ -112,13 +112,16 @@ class EndEffectorPose:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> EndEffectorPose:
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        default_frame_id: str = "world",
+    ) -> EndEffectorPose:
         return cls(
             position=tuple(data["position"]),
             wxyz=tuple(data["wxyz"]),
-            # Version-1 artifacts written before frame semantics were explicit
-            # used world coordinates by convention.
-            frame_id=data.get("frame_id", "world"),
+            frame_id=data.get("frame_id", default_frame_id),
         )
 
 
@@ -172,13 +175,22 @@ class ArmState:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> ArmState:
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        default_frame_id: str = "world",
+    ) -> ArmState:
         pose_data = data.get("ee_pose")
         return cls(
             arm=str(data.get("arm", "")),
             joint_names=tuple(data.get("joint_names", ())),
             joint_positions=tuple(data.get("joint_positions", ())),
-            ee_pose=(None if pose_data is None else EndEffectorPose.from_dict(pose_data)),
+            ee_pose=(
+                None
+                if pose_data is None
+                else EndEffectorPose.from_dict(pose_data, default_frame_id=default_frame_id)
+            ),
             gripper=data.get("gripper"),
             metadata=data.get("metadata", {}),
         )
@@ -290,13 +302,21 @@ class TrajectorySample:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> TrajectorySample:
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        default_frame_id: str = "world",
+    ) -> TrajectorySample:
         return cls(
             sequence=int(data["sequence"]),
             step=int(data["step"]),
             timestamp_s=float(data["timestamp_s"]),
             layer=TrajectoryLayer(data["layer"]),
-            arms=tuple(ArmState.from_dict(item) for item in data.get("arms", ())),
+            arms=tuple(
+                ArmState.from_dict(item, default_frame_id=default_frame_id)
+                for item in data.get("arms", ())
+            ),
             feasibility=FeasibilityMetrics.from_dict(data.get("feasibility", {})),
             payload=data.get("payload"),
             metadata=data.get("metadata", {}),
@@ -411,6 +431,16 @@ class TrajectoryArtifact:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TrajectoryArtifact:
+        metadata = data.get("metadata", {})
+        default_frame_id = "world"
+        if isinstance(metadata, Mapping):
+            configured_frame = metadata.get("eef_frame_id")
+            if isinstance(configured_frame, str) and configured_frame.strip():
+                default_frame_id = configured_frame.strip()
+            elif str(metadata.get("simulator", "")).strip().lower() == "libero":
+                # Historical LIBERO artifacts stored controller-frame EEF poses
+                # relative to the MuJoCo robot base, despite lacking a frame ID.
+                default_frame_id = "robot0_base"
         return cls(
             schema_version=int(data.get("schema_version", TRAJECTORY_SCHEMA_VERSION)),
             created_at=str(
@@ -420,8 +450,11 @@ class TrajectoryArtifact:
                 )
             ),
             max_samples_per_layer=data.get("max_samples_per_layer"),
-            metadata=data.get("metadata", {}),
-            samples=tuple(TrajectorySample.from_dict(sample) for sample in data.get("samples", ())),
+            metadata=metadata,
+            samples=tuple(
+                TrajectorySample.from_dict(sample, default_frame_id=default_frame_id)
+                for sample in data.get("samples", ())
+            ),
         )
 
     def dumps(self, *, indent: int | None = 2) -> str:

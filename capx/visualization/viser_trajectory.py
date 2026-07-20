@@ -103,6 +103,14 @@ def _segment_label(sample: TrajectorySample) -> str:
     return "continuous"
 
 
+def _latest_known_metric(samples: tuple[TrajectorySample, ...], name: str) -> bool | float | None:
+    for sample in reversed(samples):
+        value = getattr(sample.feasibility, name)
+        if value is not None:
+            return value
+    return None
+
+
 class ViserTrajectoryRenderer:
     """Render a recorder or artifact as batched paths with a scrubber.
 
@@ -530,17 +538,47 @@ class ViserTrajectoryRenderer:
                 selected_label = "latest" if through_step is None else str(through_step)
                 hidden_frames = [frame for frame in frames if frame != active_frame]
                 frame_label = active_frame or "none"
-                if hidden_frames:
+                if active_frame is not None and active_frame not in frames:
+                    frame_label += " (not present"
+                    if frames:
+                        frame_label += f"; available: {', '.join(frames)}"
+                    frame_label += ")"
+                elif hidden_frames:
                     frame_label += f" (hidden: {', '.join(hidden_frames)})"
-                elif active_frame is not None and active_frame not in frames:
-                    frame_label += " (not present)"
-                self.status_handle.content = (
+                status_samples = artifact.samples_for(through_step=through_step)
+                planner_value = _latest_known_metric(status_samples, "planner_success")
+                task_value = _latest_known_metric(status_samples, "task_success")
+                planner_label = {
+                    True: "success",
+                    False: "failed",
+                    None: "unknown",
+                }[planner_value]
+                task_label = {
+                    True: "success",
+                    False: "incomplete",
+                    None: "unknown",
+                }[task_value]
+                tracking_errors = [
+                    sample.feasibility.tracking_error_m
+                    for sample in status_samples
+                    if sample.feasibility.tracking_error_m is not None
+                ]
+                status = (
                     f"**Trajectory:** {summary['num_samples']} samples  \n"
                     f"**Timestep:** {selected_label} / {latest_step}  \n"
                     f"**Arms:** {', '.join(summary['arms']) or 'none'}  \n"
                     f"**Frame:** {frame_label}  \n"
-                    f"**Flagged infeasible:** {failed}"
+                    f"**Planner:** {planner_label}  \n"
+                    f"**Task:** {task_label}  \n"
                 )
+                if tracking_errors:
+                    status += (
+                        f"**Tracking error:** latest "
+                        f"{tracking_errors[-1]:.4f} m / max "
+                        f"{max(tracking_errors):.4f} m  \n"
+                    )
+                status += f"**Flagged infeasible:** {failed}"
+                self.status_handle.content = status
 
     def close(self) -> None:
         """Detach callbacks and remove every scene/GUI handle owned here."""

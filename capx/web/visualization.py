@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
-import socket
 from collections.abc import Mapping, MutableMapping
 from typing import Any
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 DEFAULT_VISER_PORTS = tuple(range(8080, 8100))
+
+
+def fetch_viser_http(
+    url: str,
+    *,
+    include_body: bool,
+) -> tuple[int, bytes, str, str | None]:
+    """Fetch Viser with GET, optionally closing without consuming its body."""
+
+    request = Request(url, method="GET")
+    response = urlopen(request, timeout=5)
+    try:
+        status = getattr(response, "status", None)
+        if status is None:
+            getcode = getattr(response, "getcode", None)
+            status = getcode() if callable(getcode) else 200
+        content_type = response.headers.get(
+            "Content-Type", "application/octet-stream"
+        )
+        content_length = response.headers.get("Content-Length")
+        content = response.read() if include_body else b""
+        return int(status), content, content_type, content_length
+    finally:
+        response.close()
 
 
 def probe_viser_port(
@@ -31,11 +54,15 @@ def probe_viser_port(
 
     for port in candidates:
         try:
-            # Most fallback ports are closed. A short TCP probe avoids waiting
-            # for a full HTTP timeout on every candidate.
-            with socket.create_connection(("127.0.0.1", port), timeout=0.05):
-                pass
-            with urlopen(f"http://localhost:{port}/", timeout=0.5):
+            # Viser's port is a WebSocket-aware HTTP server.  A raw TCP
+            # connect/disconnect is logged as a failed opening handshake, so
+            # probe it with a syntactically valid HTTP GET instead.
+            request = Request(
+                f"http://localhost:{port}/",
+                headers={"Range": "bytes=0-0"},
+                method="GET",
+            )
+            with urlopen(request, timeout=0.5):
                 pass
             return port
         except (OSError, TimeoutError):
@@ -116,6 +143,14 @@ def get_viser_port(env: Any) -> int | None:
     except (TypeError, ValueError, RuntimeError):
         return None
     return port if 0 < port < 65536 else None
+
+
+def reset_render_and_viser_port(env: Any) -> tuple[Any, Any, Any, int | None]:
+    """Reset/render and discover a reset-created Viser server."""
+
+    obs, info = env.reset()
+    frame = env.render() if hasattr(env, "render") else None
+    return obs, info, frame, get_viser_port(env)
 
 
 def trajectory_summary(env: Any) -> Mapping[str, Any] | None:

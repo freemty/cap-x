@@ -128,6 +128,10 @@ class _FakeLowLevelEnv:
         self.sim = _FakeSim()
         self.sim.model = _FakeModel()
         self.close_count = 0
+        self.task_success = False
+
+    def check_success(self) -> bool:
+        return self.task_success
 
     def close(self) -> None:
         self.close_count += 1
@@ -214,6 +218,7 @@ def test_move_records_commanded_action_and_executed_pose(monkeypatch: Any) -> No
     assert actual.joint_positions == tuple(target)
     assert actual.ee_pose is not None
     assert actual.ee_pose.frame_id == "robot0_base"
+    assert executed[0].feasibility.task_success is False
     assert executed[0].step == commanded[0].step == 1
     assert env.trajectory_summary()["layers"] == {
         "raw": 0,
@@ -444,6 +449,32 @@ def test_viser_asset_failure_degrades_without_breaking_environment(monkeypatch: 
     env.close()
 
 
+def test_headless_environment_loads_fk_model_for_3d_artifacts(monkeypatch: Any) -> None:
+    module = _import_libero_simulator(monkeypatch)
+    handle = _FakeHandle()
+    sentinel_urdf = object()
+    fake_loader = types.ModuleType("robot_descriptions.loaders.yourdfpy")
+    fake_loader.load_robot_description = lambda description: (  # type: ignore[attr-defined]
+        sentinel_urdf if description == "panda_description" else None
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "robot_descriptions.loaders.yourdfpy",
+        fake_loader,
+    )
+    monkeypatch.setattr(module, "load_libero_task", lambda **kwargs: handle)
+    monkeypatch.setattr(module.FrankaLiberoEnv, "reset", lambda self: ({}, {}))
+
+    env = module.FrankaLiberoEnv("libero_10", 0, viser_debug=False)
+
+    assert env.urdf is sentinel_urdf
+    assert env.viser_server is None
+    assert env.trajectory_snapshot().metadata["joint_names"] == [
+        f"panda_joint{i}" for i in range(1, 8)
+    ]
+    env.close()
+
+
 def test_curobo_success_records_planned_once_not_during_execution(monkeypatch: Any) -> None:
     module = _import_libero_api(monkeypatch)
     trajectory = np.arange(28, dtype=np.float64).reshape(4, 7) / 100.0
@@ -508,3 +539,51 @@ def test_curobo_success_records_planned_once_not_during_execution(monkeypatch: A
     assert source == "curobo_grasped_object"
     assert metadata == {"object_name": "mug"}
     assert len(fake_env.moves) == 3  # waypoints 0, 2, and the final waypoint
+
+
+def test_curobo_failure_records_planner_outcome(monkeypatch: Any) -> None:
+    module = _import_libero_api(monkeypatch)
+
+    class FakeCurobo:
+        @staticmethod
+        def plan_to_grasp_poses(*args: Any, **kwargs: Any) -> tuple[bool, None, None]:
+            return False, None, None
+
+    class FakeEnv:
+        def __init__(self) -> None:
+            self.failures: list[tuple[str, dict[str, Any]]] = []
+
+        def get_observation(self) -> dict[str, np.ndarray]:
+            return {"robot_joint_pos": np.zeros(7)}
+
+        def record_planning_failure(
+            self, *, source: str, metadata: dict[str, Any]
+        ) -> None:
+            self.failures.append((source, metadata))
+
+    fake_env = FakeEnv()
+    api = module.FrankaLiberoApi.__new__(module.FrankaLiberoApi)
+    api._env = fake_env
+    api._curobo_world_config = object()
+    monkeypatch.setattr(module, "_curobo_api", FakeCurobo())
+
+    success, path, goalset_index = api.plan_grasp_trajectory(
+        "mug",
+        object_mask=np.ones((1, 1), dtype=bool),
+        grasp_poses=[(np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]))],
+        world_config=object(),
+    )
+
+    assert success is False
+    assert path is None
+    assert goalset_index is None
+    assert fake_env.failures == [
+        (
+            "curobo_grasp",
+            {
+                "object_name": "mug",
+                "reported_success": False,
+                "goalset_index": None,
+            },
+        )
+    ]
