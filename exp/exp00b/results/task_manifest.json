@@ -1,0 +1,72 @@
+[
+  {
+    "benchmark": "robotwin",
+    "task": "adjust_bottle",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:adjust_bottle"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "beat_block_hammer",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:beat_block_hammer"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "blocks_ranking_rgb",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:blocks_ranking_rgb"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "blocks_ranking_size",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:blocks_ranking_size"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "click_alarmclock",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:click_alarmclock"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "click_bell",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:click_bell"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "dump_bin_bigbin",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:dump_bin_bigbin"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "grab_roller",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:grab_roller"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "handover_block",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:handover_block"
+  },
+  {
+    "benchmark": "robotwin",
+    "task": "handover_mic",
+    "suite": null,
+    "task_id": null,
+    "task_key": "robotwin:handover_mic"
+  }
+]
