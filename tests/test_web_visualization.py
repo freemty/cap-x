@@ -327,6 +327,28 @@ def test_viser_head_fetch_does_not_read_application_bundle(monkeypatch: Any) -> 
     assert response.closed is True
 
 
+def test_active_session_without_viser_port_never_uses_legacy_fallback(
+    monkeypatch: Any,
+) -> None:
+    from capx.web import server
+
+    class ActiveSession:
+        viser_port = None
+
+    class Manager:
+        def get_active_session(self) -> ActiveSession:
+            return ActiveSession()
+
+    monkeypatch.setattr(server, "get_session_manager", lambda: Manager())
+
+    def forbidden_fallback(preferred: int | None = None) -> int | None:
+        pytest.fail(f"active-session isolation violated: probed {preferred=}")
+
+    monkeypatch.setattr(server, "_find_viser_port", forbidden_fallback)
+
+    assert server._active_viser_port() is None
+
+
 def test_session_owned_viser_port_never_falls_back(monkeypatch: Any) -> None:
     from capx.web import visualization
 
