@@ -46,7 +46,22 @@ seconds, so completed tasks appear without restarting the viewer.
 
 ## Findings
 
-(populated after the live run)
+- All ten configured tasks were attempted and nine produced complete CaP-X
+  trial artifacts. `dump_bin_bigbin` failed before a trial completed and is
+  retained as an infrastructure error rather than being counted as task
+  failure.
+- Seven of ten generated programs executed without a sandbox error, giving a
+  70% code-execution rate. None satisfied RoboTwin's official task predicate,
+  so task success is 0/10 over attempted tasks (and 0/9 over completed trials).
+- The gap between code execution and task success is the central result: valid
+  Python over the generic grasp/place tools did not reliably express the
+  contact geometry and multi-arm procedure these tasks require.
+- This is one privileged-state generation per task at seed 1. It is an
+  integration baseline, not a variance estimate and not a perception-only
+  comparison with PhysicalAgent.
+- The normalized manifest contains ten runs and was loaded by the existing
+  viewer without restarting it. Remote absolute config paths are relocated to
+  their repository-relative copies when results are downloaded.
 
 ## Pitfalls
 
@@ -57,3 +72,10 @@ seconds, so completed tasks appear without restarting the viewer.
   tunnel.
 - Generic RoboTwin APIs may be insufficient for contact-heavy tasks; separate
   code execution, planning, task success, and infrastructure errors.
+- A benchmark-configured simulator seed must override the trial runner's reset
+  seed. Future unpinned sweeps may retry only `UnStableError` resets across the
+  configured seed candidates; model, execution, timeout, and OOM failures are
+  not silently retried.
+- Every task process runs in a dedicated process group. On timeout, terminate
+  and reap the full group so stale planner/API children cannot contaminate the
+  next task.

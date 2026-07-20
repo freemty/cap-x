@@ -1,4 +1,682 @@
 {
-  "runs": [],
+  "runs": [
+    {
+      "artifact_root": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_adjust_bottle.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "adjust_bottle",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": {
+            "message": "Sandbox exited with code 1",
+            "stage": "execution",
+            "traceback": "----------------------------------------------------------------------------------------------------\nGenerated program:\n# Code block 0\nactors = list_actors()\nprint(\"actors:\", actors)\n\nbottle = None\nfor a in actors:\n    if \"bottle\" in a.lower():\n        bottle = a\n        break\nassert bottle is not None, \"No bottle actor found\"\n\nbottle_pose = get_actor_pose(bottle)\nprint(\"bottle_pose:\", bottle_pose)\n\narm = choose_arm(bottle)\nprint(\"chosen_arm:\", arm)\n\nok = grasp_actor(bottle, arm=arm)\nassert ok, f\"grasp failed for {bottle}\"\n\ntarget = get_functional_point(bottle, index=1)\nprint(\"target:\", target)\n\nok = place_actor(bottle, target_pose=target, arm=arm, functional_point_id=1)\nassert ok, \"place failed\"\n\nok = back_to_origin(arm)\nassert ok, \"back_to_origin failed\"\n\nstatus = get_task_status()\nprint(\"status:\", status)\n\n\nEnvironment response:\n  Sandbox failed: 1\n  Stdout: actors: ['bottle', 'table', 'wall']\nbottle_pose: [-0.11878321319818497, -0.09618918597698212, 0.7737829089164734, 0.6167756915092468, -0.004058596212416887, -0.0022474736906588078, -0.787125289440155]\nchosen_arm: left\ntarget: [nan]\n\n  Stderr: Traceback (most recent call last):\n  File \"/data1/ybyang/robotwin-capx/cap-x-dual/capx/envs/tasks/base.py\", line 174, in _exec_user_code\n    exec(code, self._exec_globals, self._exec_globals)\n  File \"<string>\", line 23, in <module>\n  File \"/data1/ybyang/robotwin-capx/cap-x-dual/capx/integrations/robotwin.py\", line 82, in place_actor\n    return self._env.place_actor(\n  File \"/data1/ybyang/robotwin-capx/cap-x-dual/capx/envs/simulators/robotwin.py\", line 227, in place_actor\n    action = task.place_actor(\n  File \"/data1/ybyang/robotwin-capx/RoboTwin/envs/_base_task.py\", line 1322, in place_actor\n    place_pre_pose = self.get_place_pose(\n  File \"/data1/ybyang/robotwin-capx/RoboTwin/envs/_base_task.py\", line 1248, in get_place_pose\n    grasp_direct_vec = place_start_pose.p - end_effector_pose[:3]\nAttributeError: 'NoneType' object has no attribute 'p'\n\n  Reward: 0.0\n  Task Completed: False\n  Terminated: False, Truncated: False\n  Num Regenerations: 0\n  Num Finishes: 0\n  Num Code Blocks: 1\n----------------------------------------------------------------------------------------------------",
+            "type": "SandboxError"
+          },
+          "metrics": {
+            "code_execution_success": false,
+            "elapsed_seconds": 71.67,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 1,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "failed",
+          "task": "adjust_bottle",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T05:45:50+00:00",
+      "metrics": {
+        "code_execution_rate": 0.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 71.67,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-a2d27be6cf",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/adjust_bottle/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T05:45:50+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_beat_block_hammer.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "beat_block_hammer",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 85.62,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "beat_block_hammer",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T05:47:19+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 85.62,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-bf0a1d4be9",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/beat_block_hammer/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T05:47:19+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_blocks_ranking_rgb.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "blocks_ranking_rgb",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 546.35,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "blocks_ranking_rgb",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T05:56:28+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 546.35,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-b61a6e51e2",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/blocks_ranking_rgb/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T05:56:28+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_blocks_ranking_size.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "blocks_ranking_size",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 114.82,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "blocks_ranking_size",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T05:58:26+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 114.82,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-5b11698f35",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/blocks_ranking_size/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T05:58:26+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_click_alarmclock.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "click_alarmclock",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 152.46,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "click_alarmclock",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:01:01+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 152.46,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-9d02467aaf",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/click_alarmclock/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T06:01:01+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/click_bell/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_click_bell.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "click_bell",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/click_bell/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/click_bell/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/click_bell/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/click_bell/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 149.39,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "click_bell",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:03:33+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 149.39,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-69d5abc69b",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/click_bell/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T06:03:33+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b",
+      "benchmark": "robotwin",
+      "config": {
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "dump_bin_bigbin",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": null,
+            "responses": null,
+            "summary": null,
+            "thumbnail": null,
+            "video": null
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": {
+            "message": "CaP-X did not produce a completed trial directory; inspect outputs/exp00b/logs/robotwin_dump_bin_bigbin.log",
+            "stage": "infrastructure",
+            "type": "InfraError"
+          },
+          "metrics": {
+            "code_execution_success": false,
+            "elapsed_seconds": 48.89511374302674,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": false,
+            "reward": 0.0,
+            "sandbox_rc": 1,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "failed",
+          "task": "dump_bin_bigbin",
+          "trial": 1
+        }
+      ],
+      "error": {
+        "message": "CaP-X did not produce a completed trial directory; inspect outputs/exp00b/logs/robotwin_dump_bin_bigbin.log",
+        "stage": "infrastructure",
+        "type": "InfraError"
+      },
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:04:24.372735+00:00",
+      "metrics": {
+        "code_execution_rate": 0.0,
+        "episodes_finished": 0,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 48.89511374302674,
+        "mean_reward": 0.0,
+        "plan_success_rate": 0.0,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-c7811f21f2",
+      "runtime": {
+        "gpu": 6,
+        "host": "xdlab23_yang",
+        "seed_attempts": []
+      },
+      "schema_version": "capx.result.v1",
+      "source": "exp00b-ledger",
+      "source_path": "exp/exp00b/results/ledger.jsonl",
+      "started_at": null,
+      "status": "failed",
+      "updated_at": "2026-07-20T06:04:24.372735+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_grab_roller.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "grab_roller",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 208.91,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "grab_roller",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:07:54+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 208.91,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-7689e49ca2",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/grab_roller/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T06:07:54+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/handover_block/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_handover_block.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "handover_block",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/handover_block/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/handover_block/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/handover_block/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/handover_block/glm-5.2/run/trial_01_sandboxrc_1_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": {
+            "message": "Sandbox exited with code 1",
+            "stage": "execution",
+            "traceback": "----------------------------------------------------------------------------------------------------\nGenerated program:\n# Code block 0\nactors = list_actors()\nprint(\"actors:\", actors)\n\nblock_name = None\ntarget_name = None\nfor a in actors:\n    la = a.lower()\n    if \"block\" in la:\n        block_name = a\n    if any(k in la for k in (\"target\", \"hand\", \"zone\", \"goal\", \"receiver\", \"dst\")):\n        target_name = a\n\nif block_name is None:\n    block_name = actors[0]\nif target_name is None and len(actors) > 1:\n    for a in actors:\n        if a != block_name:\n            target_name = a\n            break\n\nprint(\"block:\", block_name, \"target:\", target_name)\n\nblock_pose = get_actor_pose(block_name)\nprint(\"block_pose:\", block_pose)\n\ntarget_pose = None\nfp_id = None\nif target_name is not None:\n    try:\n        target_pose = get_functional_point(target_name, 1)\n        fp_id = 1\n    except Exception:\n        target_pose = get_actor_pose(target_name)\n    print(\"target_pose:\", target_pose)\n\narm = choose_arm(block_name)\nprint(\"arm:\", arm)\n\nok = grasp_actor(block_name, arm=arm, pre_grasp_dis=0.09)\nif not ok:\n    raise RuntimeError(\"grasp_actor failed for \" + str(block_name))\nprint(\"grasp ok\")\n\nif target_pose is not None:\n    ok = place_actor(block_name, target_pose, arm=arm, functional_point_id=fp_id)\n    if not ok:\n        raise RuntimeError(\"place_actor failed for \" + str(block_name))\n    print(\"place ok\")\n\nok = open_gripper(arm)\nif not ok:\n    raise RuntimeError(\"open_gripper failed\")\nprint(\"gripper opened\")\n\nok = back_to_origin(arm)\nif not ok:\n    raise RuntimeError(\"back_to_origin failed\")\nprint(\"returned to origin\")\n\nstatus = get_task_status()\nprint(\"status:\", status)\n\n\nEnvironment response:\n  Sandbox failed: 1\n  Stdout: actors: ['box', 'table', 'target_box', 'wall']\nblock: box target: target_box\nblock_pose: [-0.07437734305858612, 0.006845654919743538, 0.840000569820404, 0.9922851920127869, 5.600162694463506e-06, -4.869569693255471e-06, 0.12397672981023788]\ntarget_pose: [0.1297152191400528, 0.19003723561763763, 0.7459999966621399, 0.0, 1.0, 0.0, 0.0]\narm: left\ngrasp ok\n\n  Stderr: Traceback (most recent call last):\n  File \"/data1/ybyang/robotwin-capx/cap-x-dual/capx/envs/tasks/base.py\", line 174, in _exec_user_code\n    exec(code, self._exec_globals, self._exec_globals)\n  File \"<string>\", line 47, in <module>\nRuntimeError: place_actor failed for box\n\n  Reward: 0.0\n  Task Completed: False\n  Terminated: False, Truncated: False\n  Num Regenerations: 0\n  Num Finishes: 0\n  Num Code Blocks: 1\n----------------------------------------------------------------------------------------------------",
+            "type": "SandboxError"
+          },
+          "metrics": {
+            "code_execution_success": false,
+            "elapsed_seconds": 353.57,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 1,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "failed",
+          "task": "handover_block",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:13:51+00:00",
+      "metrics": {
+        "code_execution_rate": 0.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 353.57,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-6c135ded3f",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/handover_block/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T06:13:51+00:00"
+    },
+    {
+      "artifact_root": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run",
+      "benchmark": "robotwin",
+      "config": {
+        "config_path": "outputs/exp00b/configs/robotwin/robotwin_handover_mic.yaml",
+        "embodiment": "aloha-agilex",
+        "model": "glm-5.2",
+        "suite": null,
+        "task": "handover_mic",
+        "task_id": null
+      },
+      "episodes": [
+        {
+          "artifacts": {
+            "events": null,
+            "generated_code": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/code.py",
+            "responses": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/all_responses.json",
+            "summary": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/summary.txt",
+            "thumbnail": null,
+            "video": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run/trial_01_sandboxrc_0_reward_0.000_taskcompleted_0/video_combined.mp4"
+          },
+          "details": null,
+          "episode_id": "trial-1",
+          "error": null,
+          "metrics": {
+            "code_execution_success": true,
+            "elapsed_seconds": 315.34,
+            "num_code_blocks": null,
+            "num_regenerations": null,
+            "plan_success": null,
+            "reward": 0.0,
+            "sandbox_rc": 0,
+            "task_success": false
+          },
+          "seed": 1,
+          "status": "complete",
+          "task": "handover_mic",
+          "trial": 1
+        }
+      ],
+      "error": null,
+      "experiment": "exp00b",
+      "finished_at": "2026-07-20T06:19:10+00:00",
+      "metrics": {
+        "code_execution_rate": 1.0,
+        "episodes_finished": 1,
+        "episodes_total": 1,
+        "mean_elapsed_seconds": 315.34,
+        "mean_reward": 0.0,
+        "plan_success_rate": null,
+        "task_success_rate": 0.0
+      },
+      "policy": "capx",
+      "run_id": "exp00b-robotwin-glm-5.2-7d920647ab",
+      "runtime": {
+        "git_commit": "unknown (Dirty: False)",
+        "gpu": 6,
+        "host": "xdlab23_yang"
+      },
+      "schema_version": "capx.result.v1",
+      "source": "capx-output-folders",
+      "source_path": "outputs/exp00b/robotwin/handover_mic/glm-5.2/run",
+      "started_at": null,
+      "status": "complete",
+      "updated_at": "2026-07-20T06:19:10+00:00"
+    }
+  ],
   "schema": "capx.result.v1"
 }

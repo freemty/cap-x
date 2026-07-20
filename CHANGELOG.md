@@ -27,6 +27,12 @@
   oracle from the `dev-local-bringup` file-handoff runtime and to define a
   reproducible cross-system benchmark boundary.
 
+### Experimental results
+
+- Completed the ten-task `exp00b` GLM-5.2/CaP-X RoboTwin baseline: 10/10 tasks
+  attempted, 9/10 produced trials, 70% code-execution rate, 0% task-success
+  rate, and one infrastructure failure.
+
 ### Verification
 
 - `55 passed, 3 subtests passed` across the changed Python test surface.
