@@ -8,7 +8,7 @@ protocol:
   server_url: http://127.0.0.1:8110/chat/completions
   upstream_url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
   reasoning_effort: max
-  max_tokens: 4096
+  max_tokens: 65536
   temperature: 1.0
   trials_per_task: 1
   num_workers: 1
