@@ -134,6 +134,25 @@ def test_artifact_json_round_trip(tmp_path: Path) -> None:
     assert restored.samples_for(layer="executed") == ()
 
 
+def test_end_effector_pose_frame_round_trip_and_legacy_default() -> None:
+    pose_in_base = EndEffectorPose(
+        position=(0.1, 0.2, 0.3),
+        wxyz=(1.0, 0.0, 0.0, 0.0),
+        frame_id="robot_base",
+    )
+
+    assert EndEffectorPose.from_dict(pose_in_base.to_dict()) == pose_in_base
+    assert EndEffectorPose.from_dict(
+        {"position": [0.0, 0.0, 0.0], "wxyz": [1.0, 0.0, 0.0, 0.0]}
+    ).frame_id == "world"
+    with pytest.raises(ValueError, match="frame_id"):
+        EndEffectorPose(
+            position=(0.0, 0.0, 0.0),
+            wxyz=(1.0, 0.0, 0.0, 0.0),
+            frame_id=" ",
+        )
+
+
 def test_recorder_is_thread_safe_and_sequences_are_unique() -> None:
     recorder = TrajectoryRecorder(max_samples_per_layer=512)
 

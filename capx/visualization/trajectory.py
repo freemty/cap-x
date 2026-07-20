@@ -86,10 +86,11 @@ def _json_safe(value: Any, path: str = "value") -> Any:
 
 @dataclass(frozen=True, slots=True)
 class EndEffectorPose:
-    """A world-frame end-effector pose using a scalar-first quaternion."""
+    """A framed end-effector pose using a scalar-first quaternion."""
 
     position: tuple[float, float, float]
     wxyz: tuple[float, float, float, float]
+    frame_id: str = "world"
 
     def __post_init__(self) -> None:
         position = _float_tuple(self.position, 3, "position")
@@ -97,15 +98,28 @@ class EndEffectorPose:
         norm = math.sqrt(sum(component * component for component in wxyz))
         if norm <= 1e-12:
             raise ValueError("wxyz quaternion must have non-zero norm")
+        if not isinstance(self.frame_id, str) or not self.frame_id.strip():
+            raise ValueError("frame_id must be a non-empty string")
         object.__setattr__(self, "position", position)
         object.__setattr__(self, "wxyz", tuple(component / norm for component in wxyz))
+        object.__setattr__(self, "frame_id", self.frame_id.strip())
 
-    def to_dict(self) -> dict[str, list[float]]:
-        return {"position": list(self.position), "wxyz": list(self.wxyz)}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "position": list(self.position),
+            "wxyz": list(self.wxyz),
+            "frame_id": self.frame_id,
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EndEffectorPose:
-        return cls(position=tuple(data["position"]), wxyz=tuple(data["wxyz"]))
+        return cls(
+            position=tuple(data["position"]),
+            wxyz=tuple(data["wxyz"]),
+            # Version-1 artifacts written before frame semantics were explicit
+            # used world coordinates by convention.
+            frame_id=data.get("frame_id", "world"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +352,14 @@ class TrajectoryArtifact:
             for layer in TRAJECTORY_LAYERS
         }
         arms = sorted({state.arm for sample in self.samples for state in sample.arms})
+        frames = sorted(
+            {
+                state.ee_pose.frame_id
+                for sample in self.samples
+                for state in sample.arms
+                if state.ee_pose is not None
+            }
+        )
         steps = [sample.step for sample in self.samples]
         timestamps = [sample.timestamp_s for sample in self.samples]
         bool_metrics: dict[str, dict[str, int]] = {}
@@ -371,6 +393,7 @@ class TrajectoryArtifact:
             "num_samples": len(self.samples),
             "layers": layer_counts,
             "arms": arms,
+            "frames": frames,
             "step_range": None if not steps else [min(steps), max(steps)],
             "duration_s": 0.0 if not timestamps else max(timestamps) - min(timestamps),
             "feasibility": {**bool_metrics, **numeric_metrics},
