@@ -45,7 +45,8 @@ function App() {
       if (activeSession?.session_id) {
         trial.reconnectToSession(
           activeSession.session_id,
-          activeSession.config_path || FALLBACK_CONFIG
+          activeSession.config_path || FALLBACK_CONFIG,
+          activeSession.state
         );
         if (activeSession.config_path) {
           trial.loadConfig(activeSession.config_path);

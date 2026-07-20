@@ -9,6 +9,11 @@ from urllib.parse import urlparse
 
 import pytest
 
+from capx.web.async_trial_runner import (
+    TIMEOUT_SANDBOX_RC,
+    _capture_timeout_result,
+    _resolve_final_trial_status,
+)
 from capx.web.models import SessionState
 from capx.web.session_manager import (
     SessionManager,
@@ -134,6 +139,80 @@ def test_stop_completed_session_closes_retained_visualization() -> None:
         assert session.state is SessionState.IDLE
 
     asyncio.run(scenario())
+
+
+def test_complete_and_error_sessions_survive_websocket_refresh() -> None:
+    async def scenario() -> None:
+        manager = SessionManager()
+        session = await manager.create_session()
+        session.state = SessionState.COMPLETE
+        session.viser_port = 8092
+
+        await manager.on_websocket_disconnect(session.session_id)
+        assert await manager.get_session(session.session_id) is session
+        assert manager.get_active_session() is session
+
+        session.state = SessionState.ERROR
+        await manager.on_websocket_disconnect(session.session_id)
+        assert await manager.get_session(session.session_id) is session
+        assert manager.get_active_session() is session
+
+        # Starting a new session is the explicit replacement boundary.
+        replacement = await manager.create_session()
+        assert await manager.get_session(session.session_id) is None
+        assert await manager.get_session(replacement.session_id) is replacement
+
+        # Idle sessions still have no retained scene and are cleaned normally.
+        await manager.on_websocket_disconnect(replacement.session_id)
+        assert await manager.get_session(replacement.session_id) is None
+
+    asyncio.run(scenario())
+
+
+def test_timeout_capture_preserves_artifact_and_forces_final_failure() -> None:
+    class LowLevel:
+        trajectory_recorder = object()
+        samples = ["before", "timeout"]
+
+        def trajectory_summary(self) -> dict[str, int]:
+            return {"executed": len(self.samples)}
+
+    class Env:
+        low_level_env = LowLevel()
+
+        def trajectory_snapshot(self) -> tuple[str, ...]:
+            return tuple(self.low_level_env.samples)
+
+        def reset(self) -> None:
+            self.low_level_env.samples.clear()
+
+    env = Env()
+    artifact, info = _capture_timeout_result(env, 7.0)
+
+    # Even a later recovery reset cannot mutate the retained failure artifact.
+    env.reset()
+    assert artifact == ("before", "timeout")
+    assert info == {
+        "sandbox_rc": TIMEOUT_SANDBOX_RC,
+        "stdout": "",
+        "stderr": (
+            "Execution timed out after 7.0 seconds. The code may be stuck in "
+            "a loop or waiting for an unreachable target."
+        ),
+        "task_completed": False,
+        "plan_success": False,
+        "trajectory": {"executed": 2},
+    }
+
+    # A successful previous block must not leak into final timeout status.
+    final = _resolve_final_trial_status(
+        info_step={"task_completed": True},
+        reward=1.0,
+        terminated=True,
+        truncated=False,
+        timed_out=True,
+    )
+    assert final == (0.0, False, True, False, False)
 
 
 def test_cleanup_interrupts_blocked_owner_call_and_reclaims_executor() -> None:

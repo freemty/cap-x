@@ -26,7 +26,6 @@ from capx.utils.launch_utils import (
     _parse_multi_turn_decision,
     _save_trial_artifacts,
 )
-from capx.utils.video_utils import _write_video
 from capx.web.models import (
     CodeExecutionResultEvent,
     CodeExecutionStartEvent,
@@ -55,6 +54,7 @@ from capx.web.session_manager import (
     run_on_owner_executor,
 )
 from capx.web.visualization import (
+    capture_trajectory_state,
     enable_web_visualization,
     reset_render_and_viser_port,
 )
@@ -62,6 +62,54 @@ from capx.web.visualization import (
 logger = logging.getLogger(__name__)
 
 MULTITURN_LIMIT = 30
+TIMEOUT_SANDBOX_RC = 124
+
+
+def _build_timeout_execution_info(
+    timeout_seconds: float,
+    trajectory: dict[str, Any],
+) -> dict[str, Any]:
+    """Build an explicit terminal failure state for a timed-out policy step."""
+
+    return {
+        "sandbox_rc": TIMEOUT_SANDBOX_RC,
+        "stdout": "",
+        "stderr": (
+            f"Execution timed out after {timeout_seconds} seconds. "
+            "The code may be stuck in a loop or waiting for an unreachable target."
+        ),
+        "task_completed": False,
+        "plan_success": False,
+        "trajectory": trajectory,
+    }
+
+
+def _capture_timeout_result(
+    env: Any,
+    timeout_seconds: float,
+) -> tuple[Any | None, dict[str, Any]]:
+    """Capture the failure trajectory before any operation can clear the scene."""
+
+    artifact, trajectory = capture_trajectory_state(env)
+    return artifact, _build_timeout_execution_info(timeout_seconds, trajectory)
+
+
+def _resolve_final_trial_status(
+    *,
+    info_step: dict[str, Any],
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    timed_out: bool,
+) -> tuple[float, bool, bool, bool, bool]:
+    """Resolve final flags without allowing stale pre-timeout success state."""
+
+    if timed_out:
+        return 0.0, False, True, False, False
+    task_completed = bool(info_step.get("task_completed", False)) or (
+        terminated and reward > 0
+    )
+    return reward, terminated, truncated, task_completed, task_completed
 
 
 @dataclass
@@ -243,6 +291,8 @@ async def run_trial_async(
         info_step = {"sandbox_rc": -1, "stdout": "", "stderr": "", "task_completed": False}
         reward = 0.0
         terminated = truncated = False
+        timed_out = False
+        retained_timeout_trajectory_artifact: Any | None = None
 
         # Build image differencing args if needed
         visual_differencing_args = ModelQueryArgs(
@@ -541,25 +591,39 @@ async def run_trial_async(
                     # has unwound; its result is intentionally discarded because
                     # the user-visible outcome remains a timeout.
                     await asyncio.gather(step_task, return_exceptions=True)
+
+                    # Preserve the failure trajectory before any recovery/reset
+                    # can clear the recorder. A timeout is terminal for this
+                    # trial, so keep the live scene at its last feasible state.
+                    try:
+                        (
+                            retained_timeout_trajectory_artifact,
+                            info_step,
+                        ) = await run_in_env_thread(
+                            _capture_timeout_result, env, exec_timeout
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to preserve timed-out trajectory: %s", exc
+                        )
+                        info_step = _build_timeout_execution_info(exec_timeout, {})
+
+                    timed_out = True
+                    reward = 0.0
+                    terminated = False
+                    truncated = True
                     await emit(CodeExecutionResultEvent(
                         session_id=session.session_id,
                         block_index=code_block_idx,
                         success=False,
-                        stdout="",
-                        stderr=f"Execution timed out after {exec_timeout} seconds. The code may be stuck in a loop or waiting for an unreachable target.",
-                        reward=0.0,
-                        task_completed=False,
-                        plan_success=False,
+                        stdout=info_step["stdout"],
+                        stderr=info_step["stderr"],
+                        reward=reward,
+                        task_completed=info_step["task_completed"],
+                        plan_success=info_step["plan_success"],
+                        trajectory=info_step["trajectory"],
                     ))
-                    # The worker is known to be idle, so reset cannot be trapped
-                    # behind the timed-out step.
-                    try:
-                        obs, _, _, session.viser_port = await run_in_env_thread(
-                            reset_render_and_viser_port, env
-                        )
-                    except Exception:
-                        pass
-                    break  # Exit code block loop, go to multi-turn decision
+                    break  # Terminal truncated trial; do not query the model again.
             finally:
                 # Finalize execution logger and get history
                 exec_history = execution_logger.finalize_execution_context()
@@ -865,7 +929,10 @@ async def run_trial_async(
         if "executing action in terminated episode" in info_step.get("stderr", ""):
             info_step["sandbox_rc"] = 0
 
-        stderr = "\n\n".join(stderr_history) if stderr_history else info_step.get("stderr", "")
+        if timed_out:
+            stderr = info_step["stderr"]
+        else:
+            stderr = "\n\n".join(stderr_history) if stderr_history else info_step.get("stderr", "")
 
         log_lines = [
             "-" * 100,
@@ -889,15 +956,16 @@ async def run_trial_async(
         code_path = None
         output_dir = session.config.get("output_dir")
         if output_dir:
-            trajectory_artifact = None
+            trajectory_artifact = retained_timeout_trajectory_artifact
             def _trajectory_snapshot():
                 snapshot = getattr(env, "trajectory_snapshot", None)
                 return snapshot() if callable(snapshot) else None
 
-            try:
-                trajectory_artifact = await run_in_env_thread(_trajectory_snapshot)
-            except Exception as exc:
-                logger.warning("Failed to snapshot trajectory: %s", exc)
+            if trajectory_artifact is None:
+                try:
+                    trajectory_artifact = await run_in_env_thread(_trajectory_snapshot)
+                except Exception as exc:
+                    logger.warning("Failed to snapshot trajectory: %s", exc)
             logger.info(f"Saving trial artifacts to: {output_dir}")
             code_path = await asyncio.to_thread(
                 _save_trial_artifacts,
@@ -932,6 +1000,8 @@ async def run_trial_async(
 
                 frames = await run_in_env_thread(_get_video_frames)
                 if frames:
+                    from capx.utils.video_utils import _write_video
+
                     video_dir = os.path.join(
                         output_dir,
                         f"trial_{trial:02d}_sandboxrc_{info_step['sandbox_rc']}_reward_{reward:.3f}_taskcompleted_{int(info_step.get('task_completed', False))}",
@@ -945,9 +1015,18 @@ async def run_trial_async(
         else:
             logger.info("No output_dir configured, skipping artifact save")
 
-        # Environment success and the model's decision to stop are distinct.
-        task_completed = bool(info_step.get("task_completed", False)) or (terminated and reward > 0)
-        success = task_completed
+        # Environment success and the model's decision to stop are distinct. A
+        # timeout is always a terminal truncated failure, regardless of any
+        # successful state retained from an earlier code block.
+        reward, terminated, truncated, task_completed, success = (
+            _resolve_final_trial_status(
+                info_step=info_step,
+                reward=reward,
+                terminated=terminated,
+                truncated=truncated,
+                timed_out=timed_out,
+            )
+        )
 
         # Emit completion
         session.state = SessionState.COMPLETE
@@ -957,7 +1036,7 @@ async def run_trial_async(
             total_reward=reward,
             task_completed=task_completed,
             plan_success=info_step.get("plan_success"),
-            agent_finished=num_finishes > 0,
+            agent_finished=num_finishes > 0 and not timed_out,
             trajectory=info_step.get("trajectory", {}),
             num_regenerations=num_regenerations,
             num_code_blocks=len(code_blocks),

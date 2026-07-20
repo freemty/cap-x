@@ -23,6 +23,26 @@ from capx.visualization.trajectory import (
     TrajectoryRecorder,
 )
 
+# ``panda_description`` and LIBERO's robosuite Panda use slightly different
+# fixed gripper chains after link 7.  LIBERO's XML encodes ``right_hand`` yaw
+# with quaternion (w=0.924, z=-0.383), while the URDF ``panda_hand_joint`` uses
+# -pi/4.  The gripper-root -pi/2 and controller +pi/2 rotations cancel.  After
+# also composing the two z offsets, the exact hand-to-controller correction is
+# this small residual yaw and -10.5 mm along local z.  Keeping the transform
+# explicit makes planned URDF FK and executed MuJoCo poses share one
+# ``robot0_base`` convention without changing the public control API.
+PANDA_URDF_HAND_TO_LIBERO_CONTROL_YAW_RAD = float(
+    2.0 * np.arctan2(-0.383, 0.924) - (-np.pi / 4.0)
+)
+PANDA_URDF_HAND_TO_LIBERO_CONTROL = vtf.SE3.from_rotation_and_translation(
+    rotation=vtf.SO3.from_rpy_radians(
+        0.0,
+        0.0,
+        PANDA_URDF_HAND_TO_LIBERO_CONTROL_YAW_RAD,
+    ),
+    translation=np.array([0.0, 0.0, -0.0105], dtype=np.float64),
+)
+
 here = os.path.dirname(os.path.abspath(__file__))
 vendor_root = os.path.normpath(
     os.path.join(here, "..", "..", "third_party", "LIBERO-PRO", "libero")
@@ -297,10 +317,6 @@ class FrankaLiberoEnv(BaseEnv):
             self._read_panda_joint_positions(),
             gripper_position,
         )
-        control_offset = vtf.SE3.from_rotation_and_translation(
-            rotation=vtf.SO3.from_rpy_radians(0.0, 0.0, np.pi / 2.0),
-            translation=np.array([0.0, 0.0, -0.107]),
-        )
         poses: list[EndEffectorPose | None] = []
         try:
             for waypoint in joint_trajectory:
@@ -309,7 +325,10 @@ class FrankaLiberoEnv(BaseEnv):
                     urdf.get_transform("panda_hand", "panda_link0"),
                     dtype=np.float64,
                 )
-                base_to_control = vtf.SE3.from_matrix(base_to_hand) @ control_offset
+                base_to_control = (
+                    vtf.SE3.from_matrix(base_to_hand)
+                    @ PANDA_URDF_HAND_TO_LIBERO_CONTROL
+                )
                 poses.append(
                     EndEffectorPose(
                         position=tuple(

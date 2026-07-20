@@ -310,10 +310,17 @@ def test_planned_path_uses_urdf_fk_and_restores_live_configuration(
         for sample in planned
     )
     expected_position = trajectory[1, :3].copy()
-    expected_position[2] -= 0.107
+    expected_position[2] -= 0.0105
     np.testing.assert_allclose(
         planned[1].arm_state("panda").ee_pose.position,
         expected_position,
+    )
+    expected_yaw = 2.0 * np.arctan2(-0.383, 0.924) - (-np.pi / 4.0)
+    np.testing.assert_allclose(
+        planned[1].arm_state("panda").ee_pose.wxyz,
+        np.array(
+            [np.cos(expected_yaw / 2.0), 0.0, 0.0, np.sin(expected_yaw / 2.0)]
+        ),
     )
     np.testing.assert_allclose(urdf.configuration[:7], np.zeros(7))
     assert urdf.configuration[7] == pytest.approx(0.04)
@@ -335,7 +342,22 @@ def test_commanded_path_uses_fk_and_reports_cartesian_tracking_error(
         def get_transform(self, frame_to: str, frame_from: str) -> np.ndarray:
             assert (frame_to, frame_from) == ("panda_hand", "panda_link0")
             transform = np.eye(4)
-            transform[:3, 3] = self.configuration[:3]
+            # Match the real fixed-chain relationship used by LIBERO:
+            # hand * Tz(-0.0105) == gripper0_eef * Rz(+90) * Tz(-0.107).
+            hand_yaw = (
+                np.pi / 2.0
+                - module.PANDA_URDF_HAND_TO_LIBERO_CONTROL_YAW_RAD
+            )
+            transform[:3, :3] = np.array(
+                [
+                    [np.cos(hand_yaw), -np.sin(hand_yaw), 0.0],
+                    [np.sin(hand_yaw), np.cos(hand_yaw), 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+            transform[:3, 3] = self.configuration[:3] + np.array(
+                [0.0, 0.0, -0.0965]
+            )
             return transform
 
     env.urdf = FakeUrdf()
@@ -348,6 +370,10 @@ def test_commanded_path_uses_fk_and_reports_cartesian_tracking_error(
     executed = artifact.samples_for("executed")[0]
     assert commanded.arm_state("panda").ee_pose is not None
     assert executed.feasibility.tracking_error_m == pytest.approx(0.0)
+    np.testing.assert_allclose(
+        commanded.arm_state("panda").ee_pose.wxyz,
+        executed.arm_state("panda").ee_pose.wxyz,
+    )
 
 
 def test_reset_clears_trajectory_and_exposes_summary(monkeypatch: Any) -> None:

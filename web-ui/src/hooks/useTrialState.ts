@@ -19,7 +19,7 @@ interface TrialState {
 
 interface ActiveSessionResponse {
   session_id: string | null;
-  state?: string;
+  state?: SessionState;
   config_path?: string;
 }
 
@@ -33,7 +33,11 @@ interface UseTrialStateReturn extends TrialState {
   reset: () => void;
   fullReset: () => void;
   checkActiveSession: () => Promise<ActiveSessionResponse | null>;
-  reconnectToSession: (sessionId: string, configPath: string) => void;
+  reconnectToSession: (
+    sessionId: string,
+    configPath: string,
+    state?: SessionState
+  ) => void;
   updateSettings: (settings: { await_user_input_each_turn?: boolean }) => void;
 }
 
@@ -385,7 +389,9 @@ export function useTrialState(): UseTrialStateReturn {
           ...prev,
           configPath,
           taskPrompt: data.task_prompt,
-          state: 'idle',
+          // A config fetch may finish after an active session's WebSocket has
+          // replayed COMPLETE/ERROR. Never erase that retained session state.
+          state: prev.sessionId === null ? 'idle' : prev.state,
         }));
 
         return data;
@@ -515,12 +521,12 @@ export function useTrialState(): UseTrialStateReturn {
   }, []);
 
   const reconnectToSession = useCallback(
-    (sessionId: string, configPath: string) => {
+    (sessionId: string, configPath: string, state?: SessionState) => {
       setTrialState((prev) => ({
         ...prev,
         sessionId,
         configPath,
-        state: 'running', // Assume running, WebSocket will update
+        state: state ?? 'running',
         messages: [
           {
             id: generateMessageId(),

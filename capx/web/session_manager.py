@@ -490,6 +490,7 @@ class SessionManager:
                 SessionState.AWAITING_USER_INPUT,
                 SessionState.LOADING_CONFIG,
                 SessionState.COMPLETE,
+                SessionState.ERROR,
             ):
                 return session
         return None
@@ -497,19 +498,20 @@ class SessionManager:
     async def on_websocket_disconnect(self, session_id: str) -> None:
         """Handle WebSocket disconnection.
 
-        If the session has no more connected WebSockets and is still running,
-        we'll keep it alive briefly in case of reconnection. If it's complete
-        or errored, clean it up.
+        Completed and errored sessions retain their simulator/Viser state across
+        refreshes. They are reclaimed by explicit stop or when a new session is
+        created. An idle session has no useful live scene and can be removed.
         """
         session = await self.get_session(session_id)
         if not session:
             return
 
-        # If session is complete/error and no WebSockets, clean up
-        if session.state in (SessionState.COMPLETE, SessionState.ERROR, SessionState.IDLE):
-            if not session.websockets:
-                logger.info(f"Session {session_id} has no connections and is {session.state}, cleaning up")
-                await self.remove_session(session_id)
+        if session.state is SessionState.IDLE and not session.websockets:
+            logger.info(
+                "Session %s has no connections and is idle, cleaning up",
+                session_id,
+            )
+            await self.remove_session(session_id)
 
 
 # Global singleton

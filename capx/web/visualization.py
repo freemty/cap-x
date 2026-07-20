@@ -164,3 +164,12 @@ def trajectory_summary(env: Any) -> Mapping[str, Any] | None:
         return None
     summary = summary_fn()
     return summary if isinstance(summary, Mapping) else None
+
+
+def capture_trajectory_state(env: Any) -> tuple[Any | None, dict[str, Any]]:
+    """Atomically capture the full artifact and compact status before mutation."""
+
+    snapshot_fn = getattr(env, "trajectory_snapshot", None)
+    artifact = snapshot_fn() if callable(snapshot_fn) else None
+    summary = trajectory_summary(env)
+    return artifact, dict(summary) if summary is not None else {}

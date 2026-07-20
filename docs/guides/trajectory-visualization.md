@@ -93,7 +93,8 @@ The backend remembers the exact port selected by Viser and proxies both HTTP
 and WebSocket traffic through `/viser-proxy`. Simulator construction, stepping,
 rendering, and shutdown stay on one owner thread so MuJoCo/SAPIEN graphics
 contexts are not closed from the event-loop thread. A completed session keeps
-its view alive until it is stopped, replaced, or its final WebSocket disconnects.
+its view alive across page refreshes until it is explicitly stopped or replaced
+by a new session.
 
 ## Offline replay
 
@@ -139,7 +140,9 @@ metadata/LIBERO migration rule above. Use
 
 LIBERO records controller targets and measured MuJoCo state on every control
 step. Successful CuRobo paths are recorded as planned waypoints and use Panda
-URDF FK. Its existing Viser scene also provides RGB-D point-cloud context.
+URDF FK. A calibrated fixed hand-to-controller transform puts that FK in the
+same `robot0_base` convention as measured MuJoCo poses. Its existing Viser scene
+also provides RGB-D point-cloud context.
 
 RoboTwin instruments native `task.move`, `take_dense_action`, articulation drive
 targets, and `scene.step` without changing the external RoboTwin checkout. It
