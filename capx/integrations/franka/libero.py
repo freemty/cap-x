@@ -890,6 +890,18 @@ class FrankaLiberoApi(ApiBase):
             ignore_obstacle_names=ignore_obstacle_names if use_world_collision else None,
             **kwargs,
         )
+        record_planned = getattr(self._env, "record_planned_joint_trajectory", None)
+        if success and joint_traj is not None and callable(record_planned):
+            record_planned(
+                joint_traj,
+                source="curobo_grasp",
+                metadata={
+                    "object_name": object_name,
+                    "goalset_index": (
+                        int(goalset_idx) if goalset_idx is not None else None
+                    ),
+                },
+            )
         return success, joint_traj, goalset_idx
 
     def execute_joint_trajectory(
@@ -1066,4 +1078,11 @@ class FrankaLiberoApi(ApiBase):
             debug_out_dir=debug_out_dir,
             **kwargs,
         )
+        record_planned = getattr(self._env, "record_planned_joint_trajectory", None)
+        if success and joint_traj is not None and callable(record_planned):
+            record_planned(
+                joint_traj,
+                source="curobo_grasped_object",
+                metadata={"object_name": object_name},
+            )
         return success, joint_traj

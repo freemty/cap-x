@@ -8,7 +8,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 from fastapi import WebSocket
@@ -93,6 +93,8 @@ class Session:
 
     # Environment reference for forced shutdown
     env: Any = None
+    env_executor: Any = None
+    viser_port: int | None = None
 
     # Thread tracking for interruption
     execution_thread_id: int | None = None
@@ -106,7 +108,9 @@ class Session:
     num_regenerations: int = 0
 
     # Timestamps
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -137,6 +141,8 @@ class Session:
         self.event_history = []
         self.task = None
         self.env = None
+        self.env_executor = None
+        self.viser_port = None
         self.execution_thread_id = None
         self.current_block_index = 0
         self.total_code_blocks = 0
@@ -186,6 +192,8 @@ class SessionManager:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
+        await self._close_environment(session)
+
         # Close all WebSocket connections
         for ws in session.websockets:
             try:
@@ -195,6 +203,37 @@ class SessionManager:
 
         del self._sessions[session_id]
         logger.info(f"Session cleaned up: {session_id}")
+
+    async def _close_environment(self, session: Session) -> None:
+        """Close a simulator on the thread that owns its rendering context."""
+
+        env = session.env
+        executor = session.env_executor
+        session.env = None
+        session.env_executor = None
+        session.viser_port = None
+
+        def close() -> None:
+            if env is None:
+                return
+            if hasattr(env, "close"):
+                env.close()
+            elif hasattr(env, "shutdown"):
+                env.shutdown()
+
+        try:
+            if env is not None and executor is not None:
+                loop = asyncio.get_running_loop()
+                await asyncio.wait_for(loop.run_in_executor(executor, close), timeout=5.0)
+            elif env is not None:
+                await asyncio.wait_for(asyncio.to_thread(close), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Timed out while closing environment for session %s", session.session_id)
+        except Exception as exc:
+            logger.warning("Error closing environment for session %s: %s", session.session_id, exc)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
 
     async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID."""
@@ -227,17 +266,6 @@ class SessionManager:
                 else:
                     logger.warning("Thread interrupt failed")
 
-            # Try to close the environment immediately to interrupt any running code
-            if session.env is not None:
-                try:
-                    logger.info(f"Attempting to close environment for session {session_id}")
-                    if hasattr(session.env, 'close'):
-                        session.env.close()
-                    elif hasattr(session.env, 'shutdown'):
-                        session.env.shutdown()
-                except Exception as e:
-                    logger.warning(f"Error closing environment: {e}")
-
             # Cancel the task immediately (don't wait for graceful shutdown)
             session.task.cancel()
             try:
@@ -245,9 +273,13 @@ class SessionManager:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
+        had_environment = session.env is not None or session.env_executor is not None
+        if had_environment:
+            await self._close_environment(session)
+
+        if session.task is not None or had_environment:
             session.state = SessionState.IDLE
-            session.env = None  # Clear env reference
-            session.execution_thread_id = None  # Clear thread reference
+            session.execution_thread_id = None
             logger.info(f"Session {session_id} stopped")
             return True
 
@@ -285,7 +317,12 @@ class SessionManager:
         the single session if it exists and is still running.
         """
         for session in self._sessions.values():
-            if session.state in (SessionState.RUNNING, SessionState.AWAITING_USER_INPUT, SessionState.LOADING_CONFIG):
+            if session.state in (
+                SessionState.RUNNING,
+                SessionState.AWAITING_USER_INPUT,
+                SessionState.LOADING_CONFIG,
+                SessionState.COMPLETE,
+            ):
                 return session
         return None
 

@@ -259,9 +259,14 @@ def _run_trial_batch(
     multi_turn_prompt = env_factory["cfg"].get("multi_turn_prompt", None)
 
     summaries: list[TrialSummary] = []
-    for trial in tqdm(trial_indices, desc="Running Trials"):
-        summary = _run_trial_with_retries(env, trial, args, config, multi_turn_prompt)
-        summaries.append(summary)
+    try:
+        for trial in tqdm(trial_indices, desc="Running Trials"):
+            summary = _run_trial_with_retries(env, trial, args, config, multi_turn_prompt)
+            summaries.append(summary)
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
 
     summaries.sort(key=lambda s: s.trial)
     return summaries
@@ -360,6 +365,7 @@ def _build_timeout_summary(
         visual_feedback_imgs=pa.get("visual_feedback_imgs", []),
         ensemble_data=pa.get("ensemble_data"),
         multiturn_ensemble_data=pa.get("multiturn_ensemble_data", []),
+        trajectory_artifact=pa.get("trajectory_artifact"),
     )
 
     return TrialSummary(

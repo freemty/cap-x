@@ -6,6 +6,48 @@ import { ThinkingSection } from './ThinkingSection';
 import { ImageViewer } from './ImageViewer';
 import { ExecutionDetailDropdown } from './ExecutionDetailDropdown';
 
+function TrajectoryStatus({ trajectory }: { trajectory?: Record<string, unknown> }) {
+  if (!trajectory) return null;
+  const layers = trajectory.layers;
+  if (!layers || typeof layers !== 'object') return null;
+
+  const layerCounts = layers as Record<string, unknown>;
+  const count = (name: string) => {
+    const value = layerCounts[name];
+    return typeof value === 'number' ? value : 0;
+  };
+  const total = typeof trajectory.num_samples === 'number'
+    ? trajectory.num_samples
+    : count('raw') + count('planned') + count('commanded') + count('executed');
+  const arms = Array.isArray(trajectory.arms)
+    ? trajectory.arms.filter((arm): arm is string => typeof arm === 'string')
+    : [];
+
+  let failedChecks = 0;
+  if (trajectory.feasibility && typeof trajectory.feasibility === 'object') {
+    for (const metric of Object.values(trajectory.feasibility as Record<string, unknown>)) {
+      if (metric && typeof metric === 'object') {
+        const failed = (metric as Record<string, unknown>).false;
+        if (typeof failed === 'number') failedChecks += failed;
+      }
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-surface-border bg-surface-sunken/50 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-text-secondary">
+        <span className="font-display font-medium text-text-primary">Trajectory {total}</span>
+        <span>Planned <strong className="text-blue-400">{count('planned')}</strong></span>
+        <span>Commanded <strong className="text-amber-400">{count('commanded')}</strong></span>
+        <span>Executed <strong className="text-nv-green">{count('executed')}</strong></span>
+        {count('raw') > 0 && <span>Raw <strong className="text-text-primary">{count('raw')}</strong></span>}
+        {arms.length > 0 && <span>Arms <strong className="text-text-primary">{arms.join(', ')}</strong></span>}
+        {failedChecks > 0 && <span>Failed checks <strong className="text-red-400">{failedChecks}</strong></span>}
+      </div>
+    </div>
+  );
+}
+
 // Component for generating message with live timer
 function GeneratingMessage({ message, timestamp }: { message: ChatMessage; timestamp: string }) {
   const [elapsed, setElapsed] = useState(0);
@@ -342,6 +384,7 @@ export function ChatMessageComponent({ message }: ChatMessageComponentProps) {
             ) : !message.isExecuting && !hasExecutionSteps ? (
               <div className="text-xs text-text-tertiary">No output</div>
             ) : null}
+            {!message.isExecuting && <TrajectoryStatus trajectory={message.trajectory} />}
           </div>
         </div>
       );
@@ -408,7 +451,13 @@ export function ChatMessageComponent({ message }: ChatMessageComponentProps) {
       );
 
     case 'completion': {
-      const isSuccess = Boolean(message.success);
+      const isSuccess = Boolean(message.taskCompleted);
+      const plannerState = message.planSuccess == null
+        ? 'Not reported'
+        : message.planSuccess
+        ? 'Passed'
+        : 'Failed';
+      const agentState = message.agentFinished ? 'Finish' : 'Stopped';
       return (
         <div className={`p-5 rounded-lg border msg-enter animate-scale-in ${
           isSuccess
@@ -429,13 +478,23 @@ export function ChatMessageComponent({ message }: ChatMessageComponentProps) {
             </div>
             <div>
               <div className={`font-display font-bold text-sm ${isSuccess ? 'text-nv-green' : 'text-red-400'}`}>
-                {isSuccess ? 'Trial Completed Successfully' : 'Trial Failed'}
+                {isSuccess ? 'Environment Task Verified' : 'Task Predicate Not Satisfied'}
               </div>
               <div className="text-xs text-text-tertiary mt-0.5">
-                {isSuccess ? 'The model finished the task' : 'Maximum turns exceeded'}
+                {isSuccess
+                  ? 'The simulator reports task success'
+                  : message.agentFinished
+                  ? 'The model chose Finish, but the simulator reports failure'
+                  : 'The trial ended without simulator-verified success'}
               </div>
             </div>
           </div>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-secondary">
+            <span>Environment: <strong className={isSuccess ? 'text-nv-green' : 'text-red-400'}>{isSuccess ? 'Passed' : 'Failed'}</strong></span>
+            <span>Planner: <strong className="text-text-primary">{plannerState}</strong></span>
+            <span>Agent: <strong className="text-text-primary">{agentState}</strong></span>
+          </div>
+          <TrajectoryStatus trajectory={message.trajectory} />
           {message.summary && (
             <details className="mt-3 group">
               <summary className="text-xs text-text-tertiary cursor-pointer list-none flex items-center gap-1 hover:text-text-primary transition-colors">

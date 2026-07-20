@@ -566,7 +566,7 @@ requires-dist = [
     { name = "uvicorn" },
     { name = "uvloop", marker = "extra == 'verl'", specifier = "==0.21.0" },
     { name = "verl", marker = "extra == 'verl'", directory = "capx/third_party/verl" },
-    { name = "viser", specifier = ">=0.2.0" },
+    { name = "viser", specifier = ">=1.0,<2.0" },
     { name = "vllm", marker = "extra == 'molmo'", specifier = "==0.15.0" },
     { name = "vllm", marker = "extra == 'verl'", specifier = "==0.11.0" },
     { name = "warp-lang", marker = "extra == 'curobo'", specifier = ">=0.9.0" },

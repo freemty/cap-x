@@ -271,12 +271,19 @@ class CodeExecutionEnvBase(Env):
         # Force viser 3D view update after code execution so the scene
         # reflects the final state (sim substep updates may have been skipped).
         if hasattr(self.low_level_env, "viser_debug") and self.low_level_env.viser_debug:
-            self.low_level_env._update_viser_server()
+            update_visualization = getattr(self.low_level_env, "update_visualization", None)
+            if not callable(update_visualization):
+                update_visualization = getattr(self.low_level_env, "_update_viser_server", None)
+            if callable(update_visualization):
+                update_visualization()
         reward = self.compute_reward()
         if hasattr(self.low_level_env, "task_completed"):
             task_completed = self.low_level_env.task_completed()
         else:
             task_completed = None
+        plan_success_fn = getattr(self.low_level_env, "plan_success", None)
+        plan_success = plan_success_fn() if callable(plan_success_fn) else None
+        trajectory = self.trajectory_summary()
         terminated = reward == 1.0
 
         truncated = getattr(self.low_level_env, "_sim_step_count", 0) >= getattr(
@@ -294,6 +301,8 @@ class CodeExecutionEnvBase(Env):
             "stderr": exec_result["stderr"],
             "task_prompt": self._task_prompt,
             "task_completed": task_completed,
+            "plan_success": plan_success,
+            "trajectory": trajectory,
         }
         return obs, reward, bool(terminated), bool(truncated), info
 
@@ -356,6 +365,25 @@ class CodeExecutionEnvBase(Env):
         if hasattr(self.low_level_env, "_wrist_frame_buffer"):
             return [f.copy() for f in self.low_level_env._wrist_frame_buffer[start:end]]
         return []
+
+    def trajectory_summary(self) -> dict[str, Any]:
+        """Return a small JSON-safe trajectory status from the low-level env."""
+
+        summary = getattr(self.low_level_env, "trajectory_summary", None)
+        return summary() if callable(summary) else {}
+
+    def trajectory_snapshot(self) -> Any | None:
+        """Return the immutable full trajectory artifact, when supported."""
+
+        snapshot = getattr(self.low_level_env, "trajectory_snapshot", None)
+        return snapshot() if callable(snapshot) else None
+
+    def close(self) -> None:
+        """Close simulator, renderer, and auxiliary threads owned by the wrapper."""
+
+        close = getattr(self.low_level_env, "close", None)
+        if callable(close):
+            close()
 
 
 # Use user's BaseEnv for low-level envs

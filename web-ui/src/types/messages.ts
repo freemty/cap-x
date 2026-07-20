@@ -78,6 +78,8 @@ export interface CodeExecutionResultEvent extends WSEventBase {
   stderr: string;
   reward: number;
   task_completed: boolean | null;
+  plan_success: boolean | null;
+  trajectory: Record<string, unknown>;
 }
 
 export interface VisualFeedbackEvent extends WSEventBase {
@@ -114,6 +116,9 @@ export interface TrialCompleteEvent extends WSEventBase {
   success: boolean;
   total_reward: number;
   task_completed: boolean | null;
+  plan_success: boolean | null;
+  agent_finished: boolean;
+  trajectory: Record<string, unknown>;
   num_regenerations: number;
   num_code_blocks: number;
   summary: string;
@@ -249,6 +254,9 @@ export interface ChatMessage {
   stderr?: string;
   reward?: number;
   taskCompleted?: boolean | null;
+  planSuccess?: boolean | null;
+  agentFinished?: boolean;
+  trajectory?: Record<string, unknown>;
   imageBase64?: string;
   summary?: string;
   error?: string;

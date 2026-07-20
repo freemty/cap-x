@@ -204,11 +204,11 @@ def test_reset_discovers_dynamic_actors_and_closes_the_previous_task(
     first_task = FakeTask.instances[-1]
     setup = first_task.setup_calls[0]
 
-    assert info == {
-        "task": "fake_stack",
-        "embodiment": "aloha-agilex",
-        "seed": 17,
-    }
+    assert info["task"] == "fake_stack"
+    assert info["embodiment"] == "aloha-agilex"
+    assert info["seed"] == 17
+    assert info["trajectory"] == robotwin_env.trajectory_summary()
+    assert info["trajectory"]["num_samples"] == 0
     assert setup["now_ep_num"] == 4
     assert setup["seed"] == 17
     assert setup["is_test"] is True
@@ -258,9 +258,10 @@ def test_unprivileged_observation_does_not_leak_actor_or_task_state(
 
     observation = robotwin_env.get_observation()
 
-    assert set(observation) == {"head_camera"}
+    assert set(observation) == {"head_camera", "trajectory"}
     assert "actors" not in observation
     assert "status" not in observation
+    assert observation["trajectory"] == robotwin_env.trajectory_summary()
 
 
 def test_privileged_api_forwards_named_actor_and_control_arguments(

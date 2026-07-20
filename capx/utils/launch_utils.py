@@ -27,6 +27,7 @@ from capx.envs.configs.loader import DictLoader
 from capx.llm.client import (  # noqa: F401
     CLAUDE_MODELS,
     ENSEMBLE_CONFIGS,
+    GLM_MODELS,
     GPT_MODELS,
     OPENROUTER_MODELS,
     OPENROUTER_SERVER_URL,
@@ -386,6 +387,7 @@ def _save_trial_artifacts(
     visual_feedback_imgs: list[Image.Image],
     ensemble_data: dict[str, str] | None = None,
     multiturn_ensemble_data: list[dict[str, str]] | None = None,
+    trajectory_artifact: Any | None = None,
 ) -> str | None:
     """Save trial artifacts (code, logs, images) to the output directory.
 
@@ -409,6 +411,16 @@ def _save_trial_artifacts(
 
     (trial_dir / "all_responses.json").write_text(json.dumps(all_responses, indent=2))
     (trial_dir / "summary.txt").write_text("\n".join(log_lines))
+
+    if trajectory_artifact is not None:
+        trajectory_path = trial_dir / "trajectory.json"
+        save_json = getattr(trajectory_artifact, "save_json", None)
+        if callable(save_json):
+            save_json(trajectory_path)
+        else:
+            to_dict = getattr(trajectory_artifact, "to_dict", None)
+            payload = to_dict() if callable(to_dict) else trajectory_artifact
+            trajectory_path.write_text(json.dumps(payload, indent=2, allow_nan=False))
 
     # Save initial ensemble data if provided
     if ensemble_data:

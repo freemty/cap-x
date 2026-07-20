@@ -3,14 +3,19 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import numpy as np
 import yaml
 
 from capx.envs.base import BaseEnv
+from capx.envs.simulators.robotwin_instrumentation import (
+    RestorableAttributePatches,
+    RoboTwinTrajectoryInstrumentation,
+)
 
 
 class RoboTwinEnv(BaseEnv):
@@ -33,6 +38,7 @@ class RoboTwinEnv(BaseEnv):
         enable_render: bool = False,
         viser_debug: bool = False,
         video_stride: int = 8,
+        trajectory_max_samples_per_layer: int = 10_000,
     ) -> None:
         super().__init__()
         root_value = robotwin_root or os.environ.get("ROBOTWIN_ROOT")
@@ -67,6 +73,13 @@ class RoboTwinEnv(BaseEnv):
         self._frame_buffer: list[np.ndarray] = []
         self._sim_step_count = 0
         self._episode_seed: int | None = None
+        self._task_patches = RestorableAttributePatches()
+        self._trajectory = RoboTwinTrajectoryInstrumentation(
+            metadata=self._trajectory_metadata(seed=self.seed),
+            max_samples_per_layer=trajectory_max_samples_per_layer,
+        )
+        self.viser_server: Any | None = None
+        self._trajectory_renderer_attempted = False
 
     @contextmanager
     def _cwd(self) -> Iterator[None]:
@@ -111,13 +124,50 @@ class RoboTwinEnv(BaseEnv):
         args["embodiment_name"] = self.embodiment
         return args
 
+    def _trajectory_metadata(self, *, seed: int | None) -> dict[str, Any]:
+        return {
+            "simulator": "robotwin",
+            "task": self.task_name,
+            "embodiment": self.embodiment,
+            "task_config": self.task_config,
+            "seed": seed,
+        }
+
+    def _connect_trajectory_renderer(self) -> None:
+        if (
+            not self.viser_debug
+            or self._trajectory.renderer is not None
+            or self._trajectory_renderer_attempted
+        ):
+            return
+        self._trajectory_renderer_attempted = True
+        try:
+            from capx.visualization import create_viser_server
+
+            self.viser_server = create_viser_server()
+        except Exception:
+            # Recording remains available when Viser is absent or cannot bind a
+            # port (for example in a headless batch worker).
+            self.viser_server = None
+            return
+        connected = self._trajectory.connect_renderer(
+            self.viser_server,
+            timeline_max=max(1, self.max_steps),
+        )
+        if not connected:
+            server, self.viser_server = self.viser_server, None
+            stop = getattr(server, "stop", None)
+            if callable(stop):
+                with suppress(Exception):
+                    stop()
+
     def reset(
         self,
         *,
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        self.close()
+        self._close_task()
         self._task = self._task_cls()
         self._sim_step_count = 0
         self._frame_buffer.clear()
@@ -133,13 +183,22 @@ class RoboTwinEnv(BaseEnv):
             )
             # task.move(save_freq=...) calls this hook at a fixed stride.  The
             # adapter owns the frame buffer, so RoboTwin data collection stays off.
-            self._task._take_picture = self._record_frame
+            self._task_patches.patch(self._task, "_take_picture", self._record_frame)
+
+        self._trajectory.reset(
+            self._task,
+            metadata=self._trajectory_metadata(seed=self._episode_seed),
+        )
+        self._trajectory.install(self._task, self._task_patches)
+        self._connect_trajectory_renderer()
+        self._trajectory.record_current_state()
 
         obs = self.get_observation()
         return obs, {
             "task": self.task_name,
             "embodiment": self.embodiment,
             "seed": self._episode_seed,
+            "trajectory": self.trajectory_summary(),
         }
 
     def step(self, action: Any) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
@@ -285,6 +344,24 @@ class RoboTwinEnv(BaseEnv):
             "sim_steps": self._sim_step_count,
         }
 
+    def trajectory_summary(self) -> dict[str, Any]:
+        """Return a small, JSON-safe overview without trajectory arrays."""
+
+        return self._trajectory.summary()
+
+    @property
+    def trajectory_recorder(self) -> Any:
+        return self._trajectory.recorder
+
+    @property
+    def trajectory_renderer(self) -> Any | None:
+        return self._trajectory.renderer
+
+    def trajectory_snapshot(self) -> Any:
+        """Return an immutable artifact containing all retained trajectory samples."""
+
+        return self._trajectory.snapshot()
+
     def _render_rgb(self, camera: str = "head_camera") -> np.ndarray:
         task = self._require_task()
         with self._cwd():
@@ -295,6 +372,7 @@ class RoboTwinEnv(BaseEnv):
         rgb = self._render_rgb()
         observation: dict[str, Any] = {
             "head_camera": {"images": {"rgb": rgb}},
+            "trajectory": self.trajectory_summary(),
         }
         if self.privileged:
             observation.update(
@@ -342,7 +420,8 @@ class RoboTwinEnv(BaseEnv):
     def get_video_frames_range(self, start: int, end: int) -> list[np.ndarray]:
         return [frame.copy() for frame in self._frame_buffer[start:end]]
 
-    def close(self) -> None:
+    def _close_task(self) -> None:
+        self._task_patches.restore_all()
         if self._task is None:
             return
         task, self._task = self._task, None
@@ -353,6 +432,17 @@ class RoboTwinEnv(BaseEnv):
             # Closing is best-effort because SAPIEN may already have released
             # global resources after a failed setup or planner exception.
             pass
+
+    def close(self) -> None:
+        self._close_task()
+        self._trajectory.close_renderer()
+        server, self.viser_server = self.viser_server, None
+        if server is not None:
+            stop = getattr(server, "stop", None)
+            if callable(stop):
+                with suppress(Exception):
+                    stop()
+        self._trajectory_renderer_attempted = False
 
 
 __all__ = ["RoboTwinEnv"]

@@ -51,6 +51,7 @@ from capx.web.models import (
 )
 from capx.utils import execution_logger
 from capx.web.session_manager import Session, run_blocking_with_interrupt
+from capx.web.visualization import enable_web_visualization, get_viser_port
 
 logger = logging.getLogger(__name__)
 
@@ -128,15 +129,16 @@ async def run_trial_async(
             status="starting",
             message="Initializing environment...",
         ))
-        # Force enable_render and viser for the web UI so users get 3D visualization
-        if "cfg" in session.env_factory:
-            session.env_factory["cfg"]["enable_render"] = True
-            session.env_factory["cfg"]["viser_debug"] = True
+        # Configure both the execution wrapper and recursively nested simulator
+        # before Hydra-style instantiation.  Updating only the outer cfg leaves an
+        # already-constructed low-level environment with Viser disabled.
+        enable_web_visualization(session.env_factory)
 
         # Use a single-worker thread pool for ALL env operations so that MuJoCo's
         # thread-local osmesa GL context is always available for rendering.
         import concurrent.futures
         env_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="env")
+        session.env_executor = env_executor
         loop = asyncio.get_running_loop()
 
         async def run_in_env_thread(func, *args):
@@ -147,6 +149,13 @@ async def run_trial_async(
 
         # Store env reference in session for safety interrupt
         session.env = env
+        session.viser_port = get_viser_port(env)
+        if session.viser_port is not None:
+            logger.info(
+                "Viser for session %s is listening on port %d",
+                session.session_id,
+                session.viser_port,
+            )
 
         # Enable web UI logging on all API instances
         if hasattr(env, "_apis"):
@@ -513,6 +522,7 @@ async def run_trial_async(
                         stderr=f"Execution timed out after {exec_timeout} seconds. The code may be stuck in a loop or waiting for an unreachable target.",
                         reward=0.0,
                         task_completed=False,
+                        plan_success=False,
                     ))
                     # Reset env for next attempt
                     try:
@@ -538,6 +548,8 @@ async def run_trial_async(
                 stderr=info_step["stderr"],
                 reward=reward,
                 task_completed=info_step.get("task_completed"),
+                plan_success=info_step.get("plan_success"),
+                trajectory=info_step.get("trajectory", {}),
             ))
 
             code_block_idx += 1
@@ -835,6 +847,7 @@ async def run_trial_async(
             f"  Stderr: {stderr}",
             f"  Reward: {reward}",
             f"  Task Completed: {info_step.get('task_completed', 'N/A')}",
+            f"  Planner Succeeded: {info_step.get('plan_success', 'N/A')}",
             f"  Terminated: {terminated}, Truncated: {truncated}",
             f"  Num Regenerations: {num_regenerations}",
             f"  Num Finishes: {num_finishes}",
@@ -846,6 +859,13 @@ async def run_trial_async(
         code_path = None
         output_dir = session.config.get("output_dir")
         if output_dir:
+            trajectory_artifact = None
+            trajectory_snapshot = getattr(env, "trajectory_snapshot", None)
+            if callable(trajectory_snapshot):
+                try:
+                    trajectory_artifact = await run_in_env_thread(trajectory_snapshot)
+                except Exception as exc:
+                    logger.warning("Failed to snapshot trajectory: %s", exc)
             logger.info(f"Saving trial artifacts to: {output_dir}")
             code_path = await asyncio.to_thread(
                 _save_trial_artifacts,
@@ -859,6 +879,7 @@ async def run_trial_async(
                 all_responses,
                 log_lines,
                 visual_feedback_imgs,
+                trajectory_artifact=trajectory_artifact,
             )
             logger.info(f"Trial artifacts saved to: {code_path}")
 
@@ -888,10 +909,9 @@ async def run_trial_async(
         else:
             logger.info("No output_dir configured, skipping artifact save")
 
-        # Success if the environment reports task completion or termination with positive reward,
-        # OR if the model explicitly chose to finish in multi-turn mode.
+        # Environment success and the model's decision to stop are distinct.
         task_completed = bool(info_step.get("task_completed", False)) or (terminated and reward > 0)
-        success = task_completed or num_finishes > 0
+        success = task_completed
 
         # Emit completion
         session.state = SessionState.COMPLETE
@@ -900,6 +920,9 @@ async def run_trial_async(
             success=success,
             total_reward=reward,
             task_completed=task_completed,
+            plan_success=info_step.get("plan_success"),
+            agent_finished=num_finishes > 0,
+            trajectory=info_step.get("trajectory", {}),
             num_regenerations=num_regenerations,
             num_code_blocks=len(code_blocks),
             summary="\n".join(log_lines),

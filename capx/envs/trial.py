@@ -58,6 +58,18 @@ MULTITURN_LIMIT = 10
 # Shared formatting helpers
 # ---------------------------------------------------------------------------
 
+
+def _trajectory_snapshot(env: Any) -> Any | None:
+    snapshot = getattr(env, "trajectory_snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        return snapshot()
+    except Exception as exc:
+        print(f"Trajectory snapshot failed: {exc}")
+        return None
+
+
 def _annotate_code_blocks(
     code_blocks: list[str],
     code_block_metadata: list[dict[str, Any]],
@@ -796,6 +808,7 @@ def _run_single_trial(
                 "reward": reward,
                 "terminated": terminated,
                 "truncated": truncated,
+                "trajectory_artifact": _trajectory_snapshot(env),
             })
 
         obs = obs_next
@@ -873,6 +886,7 @@ def _run_single_trial(
             info_step.get("task_completed", False), final_code, raw_code,
             all_responses, ["-" * 100, "Generated program:", final_code],
             visual_feedback_imgs,
+            trajectory_artifact=_trajectory_snapshot(env),
         )
 
         # Only save intermediate video if NOT doing per-turn saving
@@ -912,6 +926,7 @@ def _run_single_trial(
         all_responses, log_lines, visual_feedback_imgs,
         ensemble_data=ensemble_data,
         multiturn_ensemble_data=multiturn_ensemble_data,
+        trajectory_artifact=_trajectory_snapshot(env),
     )
 
     # Save per-turn and combined videos

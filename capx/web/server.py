@@ -36,6 +36,7 @@ from capx.web.models import (
     StopTrialResponse,
 )
 from capx.web.session_manager import Session, get_session_manager
+from capx.web.visualization import DEFAULT_VISER_PORTS, probe_viser_port
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,28 +44,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Viser reverse-proxy helpers
 # ---------------------------------------------------------------------------
-_VISER_PORTS = [8080, 8081]
+_VISER_PORTS = DEFAULT_VISER_PORTS
 _viser_port_cache: int | None = None
 
 
-def _find_viser_port() -> int | None:
-    """Probe candidate ports to find a running Viser server (cached)."""
+def _find_viser_port(preferred: int | None = None) -> int | None:
+    """Resolve the session-owned Viser port, with a fast legacy fallback."""
     global _viser_port_cache
-    # Try cached port first
-    if _viser_port_cache is not None:
-        try:
-            urlopen(f"http://localhost:{_viser_port_cache}/", timeout=1)
-            return _viser_port_cache
-        except Exception:
-            _viser_port_cache = None
-    for port in _VISER_PORTS:
-        try:
-            urlopen(f"http://localhost:{port}/", timeout=1)
-            _viser_port_cache = port
-            return port
-        except Exception:
-            continue
-    return None
+    port = probe_viser_port(
+        preferred=preferred,
+        cached=_viser_port_cache,
+        fallback_ports=_VISER_PORTS,
+    )
+    _viser_port_cache = port
+    return port
+
+
+def _active_viser_port() -> int | None:
+    session = get_session_manager().get_active_session()
+    preferred = session.viser_port if session is not None else None
+    return _find_viser_port(preferred)
 
 
 def create_app() -> FastAPI:
@@ -427,7 +426,7 @@ def create_app() -> FastAPI:
 
     async def _proxy_viser_http(path: str = "", query: str = "") -> Response:
         """Forward an HTTP request to the local Viser server."""
-        port = await asyncio.to_thread(_find_viser_port)
+        port = await asyncio.to_thread(_active_viser_port)
         if port is None:
             return Response(
                 content="Viser server not available — is the trial running?",
@@ -465,7 +464,7 @@ def create_app() -> FastAPI:
         (replacing http→ws and stripping the trailing slash), so the iframe at
         ``/viser-proxy/`` connects to ``ws://host/viser-proxy``.
         """
-        port = await asyncio.to_thread(_find_viser_port)
+        port = await asyncio.to_thread(_active_viser_port)
         if port is None:
             await websocket.close(code=1013, reason="Viser not running")
             return

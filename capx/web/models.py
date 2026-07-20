@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -49,7 +49,9 @@ class WSEventBase(BaseModel):
     """Base model for all WebSocket events."""
 
     type: str
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
     session_id: str
 
 
@@ -124,6 +126,8 @@ class CodeExecutionResultEvent(WSEventBase):
     stderr: str
     reward: float
     task_completed: bool | None = None
+    plan_success: bool | None = None
+    trajectory: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExecutionStepEvent(WSEventBase):
@@ -174,6 +178,9 @@ class TrialCompleteEvent(WSEventBase):
     success: bool
     total_reward: float
     task_completed: bool | None = None
+    plan_success: bool | None = None
+    agent_finished: bool = False
+    trajectory: dict[str, Any] = Field(default_factory=dict)
     num_regenerations: int
     num_code_blocks: int
     summary: str

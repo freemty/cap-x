@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+from contextlib import suppress
 from typing import Any, Literal
 
 import numpy as np
 import viser
-import viser.extras
 import viser.transforms as vtf
 from robosuite.utils.camera_utils import get_real_depth_map
-from robot_descriptions.loaders.yourdfpy import load_robot_description
-from viser.extras import ViserUrdf
 
 from capx.envs.base import BaseEnv
 from capx.integrations.libero import load_libero_task
 from capx.utils.camera_utils import obs_get_rgb
 from capx.utils.depth_utils import depth_color_to_pointcloud
+from capx.visualization.trajectory import (
+    ArmState,
+    EndEffectorPose,
+    FeasibilityMetrics,
+    TrajectoryArtifact,
+    TrajectoryRecorder,
+)
 
 here = os.path.dirname(os.path.abspath(__file__))
 vendor_root = os.path.normpath(
@@ -58,6 +64,8 @@ class FrankaLiberoEnv(BaseEnv):
         self.segmentation_level = "instance"
         self._render_width = 800
         self._render_height = 512
+        self._suite_name = suite_name
+        self._task_id = task_id
 
         self.handle = load_libero_task(
             suite_name=suite_name,
@@ -107,10 +115,14 @@ class FrankaLiberoEnv(BaseEnv):
             ]
         )
 
-        # Precompute fast joint qpos addresses for Panda (avoid heavy _get_observations in tight loops)
-        joint_names = [f"robot0_joint{i}" for i in range(1, 8)]
+        # Keep artifact joint names aligned with the standard Panda URDF while
+        # retaining LIBERO's simulator-specific names only for qpos lookup.
+        # This makes a headless artifact directly replayable with
+        # ``panda_description`` instead of silently skipping every joint.
+        simulator_joint_names = [f"robot0_joint{i}" for i in range(1, 8)]
+        self._panda_joint_names = tuple(f"panda_joint{i}" for i in range(1, 8))
         self._panda_joint_qpos_addrs: list[int] = []
-        for jn in joint_names:
+        for jn in simulator_joint_names:
             addr = self.handle.env.sim.model.get_joint_qpos_addr(jn)
             # All Panda joints are 1-DoF; addr should be an int
             if isinstance(addr, tuple):
@@ -119,34 +131,290 @@ class FrankaLiberoEnv(BaseEnv):
 
         self.home_joint_position: np.ndarray | None = None
 
+        self.trajectory_recorder = TrajectoryRecorder(
+            max_samples_per_layer=max(2000, max_steps + 16),
+            metadata=self._trajectory_episode_metadata(seed=seed),
+        )
+        self.trajectory_renderer: Any | None = None
+        self._trajectory_plan_count = 0
+        self._closed = False
+
         # Viser debugging
-        self.viser_debug = viser_debug
-        if viser_debug:
-            self.viser_server = viser.ViserServer()
+        self.viser_debug = bool(viser_debug)
+        self.viser_server = None
+        self.pyroki_ee_frame_handle = None
+        self.mjcf_ee_frame_handle = None
+        self.mjcf_gripper_frame_handle = None
+        self.urdf_vis = None
+        self.viser_img_handle = None
+        self.image_frustum_handle = None
+        self.cube_points = None
+        self.cube_color = None
+        self.cube_center = None
+        self.cube_rot = None
+        self.grasp_sample = None
+        self.grasp_scores = None
+        self.grasp_contact_pts = None
+        self.grasp_frame_position = None
+        self.grasp_frame_orientation = None
 
-            self.pyroki_ee_frame_handle = None
-            self.mjcf_ee_frame_handle = None
-            self.mjcf_gripper_frame_handle = None
-            self.urdf_vis = None
-            self.viser_img_handle = None
-            self.image_frustum_handle = None
+        # FK is useful even when no live Viser server is requested: it turns
+        # planned and commanded joint paths into replayable 3D EEF paths.  Asset
+        # failure is non-fatal; joint-space recording remains available.
+        self.urdf = None
+        try:
+            from robot_descriptions.loaders.yourdfpy import load_robot_description
+
             self.urdf = load_robot_description("panda_description")
-            self.urdf_vis = ViserUrdf(self.viser_server, urdf_or_path=self.urdf, load_meshes=True)
-            self._viser_init_check()
+        except Exception as exc:  # pragma: no cover - runtime/asset dependent
+            warnings.warn(
+                f"Panda planned-path FK unavailable; recording joint states only: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if self.viser_debug:
+            try:
+                from viser.extras import ViserUrdf
 
-            self.cube_points = None
-            self.cube_color = None
-            self.cube_center = None
-            self.cube_rot = None
-            self.grasp_sample = None
-            self.grasp_scores = None
-            self.grasp_contact_pts = None
-            self.grasp_frame_position = None
-            self.grasp_frame_orientation = None
-        else:
-            self.viser_server = None
+                from capx.visualization.viser_trajectory import ViserTrajectoryRenderer
+
+                if self.urdf is None:
+                    raise RuntimeError("panda_description could not be loaded")
+                self.viser_server = viser.ViserServer()
+                self.urdf_vis = ViserUrdf(
+                    self.viser_server, urdf_or_path=self.urdf, load_meshes=True
+                )
+                self.trajectory_renderer = ViserTrajectoryRenderer(
+                    self.viser_server,
+                    source=self.trajectory_recorder,
+                    root="/trajectory/libero",
+                    robot_state_setters={"panda": self._set_viser_robot_state},
+                    auto_subscribe=False,
+                    timeline_max=max(1, self.max_steps),
+                )
+                self._viser_init_check()
+            except Exception as exc:  # pragma: no cover - runtime/asset dependent
+                warnings.warn(
+                    f"Disabling LIBERO Viser debugging because initialization failed: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._close_viser()
+                self.viser_debug = False
 
         self.reset()
+
+    def _trajectory_episode_metadata(self, *, seed: int | None) -> dict[str, Any]:
+        """Return compact, JSON-safe metadata shared by all trajectory layers."""
+        return {
+            "simulator": "libero",
+            "suite_name": self._suite_name,
+            "task_id": self._task_id,
+            "seed": self.seed if seed is None else seed,
+            "control_frequency_hz": self._control_freq,
+            "arm_names": ["panda"],
+            "joint_names": list(self._panda_joint_names),
+            "joint_name_mapping": {
+                f"robot0_joint{i}": f"panda_joint{i}" for i in range(1, 8)
+            },
+            "eef_frame_id": "robot0_base",
+        }
+
+    def trajectory_summary(self) -> dict[str, Any]:
+        """Return a compact trajectory status suitable for observations and info."""
+        return self.trajectory_recorder.summary()
+
+    def trajectory_snapshot(self) -> TrajectoryArtifact:
+        """Return an immutable snapshot for saving or offline replay."""
+        return self.trajectory_recorder.snapshot()
+
+    def _read_panda_joint_positions(self) -> np.ndarray:
+        return np.asarray(
+            self.handle.env.sim.data.qpos[self._panda_joint_qpos_addrs],
+            dtype=np.float64,
+        ).copy()
+
+    def _get_ee_pose_robot_base(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return the control-frame EEF pose in the Panda base frame."""
+        gripper_robot_base = (
+            vtf.SE3(wxyz_xyz=self.base_link_wxyz_xyz).inverse()
+            @ vtf.SE3(wxyz_xyz=self.gripper_link_wxyz_xyz)
+            @ vtf.SE3.from_rotation_and_translation(
+                rotation=vtf.SO3.from_rpy_radians(0.0, 0.0, np.pi / 2.0),
+                translation=np.array([0.0, 0.0, -0.107]),
+            )
+        )
+        return (
+            np.asarray(gripper_robot_base.translation(), dtype=np.float64),
+            np.asarray(gripper_robot_base.rotation().wxyz, dtype=np.float64),
+        )
+
+    def _arm_state(
+        self,
+        joint_positions: np.ndarray,
+        *,
+        include_ee_pose: bool,
+        ee_pose: EndEffectorPose | None = None,
+    ) -> ArmState:
+        if include_ee_pose and ee_pose is None:
+            position, wxyz = self._get_ee_pose_robot_base()
+            ee_pose = EndEffectorPose(
+                position=tuple(float(value) for value in position),
+                wxyz=tuple(float(value) for value in wxyz),
+                frame_id="robot0_base",
+            )
+        return ArmState(
+            joint_names=self._panda_joint_names,
+            joint_positions=tuple(float(value) for value in joint_positions[:7]),
+            ee_pose=ee_pose,
+            gripper=float(self._gripper_fraction),
+        )
+
+    def _planned_ee_poses(
+        self,
+        joint_trajectory: np.ndarray,
+    ) -> list[EndEffectorPose | None]:
+        """Run Panda URDF FK for a planned path, restoring the live configuration."""
+        urdf = getattr(self, "urdf", None)
+        if urdf is None:
+            return [None] * len(joint_trajectory)
+
+        gripper_position = self._gripper_fraction * self.gripper_metric_length
+        live_configuration = np.append(
+            self._read_panda_joint_positions(),
+            gripper_position,
+        )
+        control_offset = vtf.SE3.from_rotation_and_translation(
+            rotation=vtf.SO3.from_rpy_radians(0.0, 0.0, np.pi / 2.0),
+            translation=np.array([0.0, 0.0, -0.107]),
+        )
+        poses: list[EndEffectorPose | None] = []
+        try:
+            for waypoint in joint_trajectory:
+                urdf.update_cfg(np.append(waypoint[:7], gripper_position))
+                base_to_hand = np.asarray(
+                    urdf.get_transform("panda_hand", "panda_link0"),
+                    dtype=np.float64,
+                )
+                base_to_control = vtf.SE3.from_matrix(base_to_hand) @ control_offset
+                poses.append(
+                    EndEffectorPose(
+                        position=tuple(
+                            float(value) for value in base_to_control.translation()
+                        ),
+                        wxyz=tuple(
+                            float(value) for value in base_to_control.rotation().wxyz
+                        ),
+                        frame_id="robot0_base",
+                    )
+                )
+        except Exception as exc:  # pragma: no cover - depends on URDF variant
+            warnings.warn(
+                f"Panda planned-path FK unavailable; recording joint states only: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            poses = [None] * len(joint_trajectory)
+        finally:
+            try:
+                urdf_vis = getattr(self, "urdf_vis", None)
+                if urdf_vis is not None:
+                    urdf_vis.update_cfg(live_configuration)
+                else:
+                    urdf.update_cfg(live_configuration)
+            except Exception as exc:  # pragma: no cover - third-party cleanup boundary
+                warnings.warn(
+                    f"Could not restore the Panda URDF after planned-path FK: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return poses
+
+    def _update_trajectory_renderer(self) -> None:
+        renderer = self.trajectory_renderer
+        if renderer is None:
+            return
+        try:
+            renderer.update()
+        except Exception as exc:  # pragma: no cover - browser/runtime dependent
+            warnings.warn(
+                f"Disabling LIBERO trajectory rendering after update failure: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            try:
+                renderer.close()
+            finally:
+                self.trajectory_renderer = None
+
+    def _set_viser_robot_state(self, state: ArmState) -> None:
+        """Drive the existing Panda URDF when the trajectory scrubber moves."""
+        if self.urdf_vis is None or len(state.joint_positions) != 7:
+            return
+        gripper = self._gripper_fraction if state.gripper is None else state.gripper
+        configuration = np.append(
+            np.asarray(state.joint_positions, dtype=np.float64),
+            float(gripper) * self.gripper_metric_length,
+        )
+        self.urdf_vis.update_cfg(configuration)
+
+    def record_planned_joint_trajectory(
+        self,
+        joint_trajectory: np.ndarray,
+        *,
+        source: str = "planner",
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Record a planned Panda joint path without treating it as executed motion."""
+        trajectory = np.asarray(joint_trajectory, dtype=np.float64)
+        if trajectory.ndim != 2 or trajectory.shape[1] < 7:
+            raise ValueError(
+                f"joint_trajectory must have shape (T, >=7), got {trajectory.shape}"
+            )
+
+        plan_id = self._trajectory_plan_count
+        self._trajectory_plan_count += 1
+        waypoint_count = len(trajectory)
+        planned_ee_poses = self._planned_ee_poses(trajectory)
+        common_metadata = dict(metadata or {})
+        common_metadata.update(
+            {
+                "source": str(source),
+                "plan_id": plan_id,
+                "waypoint_count": waypoint_count,
+            }
+        )
+        for waypoint_index, waypoint in enumerate(trajectory):
+            sample_metadata = dict(common_metadata)
+            sample_metadata["waypoint_index"] = waypoint_index
+            sample_step = self._sim_step_count + waypoint_index + 1
+            planned_ee_pose = planned_ee_poses[waypoint_index]
+            self.trajectory_recorder.append_planned(
+                step=sample_step,
+                timestamp_s=sample_step / self._control_freq,
+                arms={
+                    "panda": self._arm_state(
+                        waypoint[:7],
+                        include_ee_pose=planned_ee_pose is not None,
+                        ee_pose=planned_ee_pose,
+                    )
+                },
+                feasibility=FeasibilityMetrics(planner_success=True),
+                metadata=sample_metadata,
+            )
+        self._update_trajectory_renderer()
+        # FK and the renderer's follow-latest mode may temporarily move the
+        # shared URDF to the planned endpoint.  Keep the live view truthful;
+        # moving the timeline will still drive the URDF through its callback.
+        if getattr(self, "urdf_vis", None) is not None:
+            with suppress(Exception):
+                self._set_viser_robot_state(
+                    self._arm_state(
+                        self._read_panda_joint_positions(),
+                        include_ee_pose=False,
+                    )
+                )
+        return plan_id
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -173,6 +441,7 @@ class FrankaLiberoEnv(BaseEnv):
 
         self._step_count = 0
         self._sim_step_count = 0
+        self._trajectory_plan_count = 0
 
         self._current_joints = self.handle.env.sim.data.qpos[:7].copy()
         self.home_joint_position = np.array(libero_obs["robot0_joint_pos"], dtype=np.float64)
@@ -183,19 +452,29 @@ class FrankaLiberoEnv(BaseEnv):
         for _ in range(10):
             self._step_once()
 
-        obs = self.get_observation()
+        # Reset settling is simulator initialization, not policy execution.
+        # Rebase the policy clock after those ten internal physics steps and
+        # refresh the cached EEF pose before constructing the first observation.
+        self._sim_step_count = 0
         self.gripper_link_wxyz_xyz = np.concatenate(
             [
                 self.handle.env.sim.data.xquat[self.gripper_link_idx],
                 self.handle.env.sim.data.xpos[self.gripper_link_idx],
             ]
         )
+        self.trajectory_recorder.reset(metadata=self._trajectory_episode_metadata(seed=seed))
+        self._update_trajectory_renderer()
+
+        obs = self.get_observation()
 
         # Update viser immediately so the 3D view reflects the reset state
         if self.viser_debug:
             self._update_viser_server()
 
-        info = {"task_prompt": self.handle.task_language}
+        info = {
+            "task_prompt": self.handle.task_language,
+            "trajectory": self.trajectory_summary(),
+        }
         return obs, info
 
     def step(self, action: Any) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
@@ -206,7 +485,7 @@ class FrankaLiberoEnv(BaseEnv):
         reward = self.compute_reward()
         terminated = False
         truncated = self._step_count >= self.max_steps
-        info: dict[str, Any] = {}
+        info: dict[str, Any] = {"trajectory": self.trajectory_summary()}
         return obs, reward, terminated, truncated, info
 
     # ----------------------- FrankaControlApi Interface -----------------------
@@ -223,6 +502,7 @@ class FrankaLiberoEnv(BaseEnv):
         """
         target = np.asarray(joints, dtype=np.float64).reshape(7)
         self._current_joints = target
+        commanded_ee_pose = self._planned_ee_poses(target.reshape(1, 7))[0]
 
         steps = 0
         while steps < max_steps:
@@ -242,6 +522,24 @@ class FrankaLiberoEnv(BaseEnv):
             # Map gripper: 1.0 (open) -> -1.0, 0.0 (closed) -> 1.0
             action[-1] = 1.0 - action[-1] * 2.0
 
+            sample_step = self._sim_step_count + 1
+            self.trajectory_recorder.append_commanded(
+                step=sample_step,
+                timestamp_s=sample_step / self._control_freq,
+                arms={
+                    "panda": self._arm_state(
+                        target,
+                        include_ee_pose=commanded_ee_pose is not None,
+                        ee_pose=commanded_ee_pose,
+                    )
+                },
+                metadata={
+                    "controller": "JOINT_POSITION",
+                    "controller_action": tuple(float(value) for value in action),
+                    "target_error_l2": float(error),
+                },
+            )
+
             # Step the environment
             self._current_obs, self._current_reward, self._current_done, self._current_info = (
                 self.handle.step(action)
@@ -253,6 +551,30 @@ class FrankaLiberoEnv(BaseEnv):
                     self.handle.env.sim.data.xquat[self.gripper_link_idx],
                     self.handle.env.sim.data.xpos[self.gripper_link_idx],
                 ]
+            )
+
+            actual_joints = self._read_panda_joint_positions()
+            executed_state = self._arm_state(
+                actual_joints,
+                include_ee_pose=True,
+            )
+            tracking_error_m = None
+            if commanded_ee_pose is not None and executed_state.ee_pose is not None:
+                tracking_error_m = float(
+                    np.linalg.norm(
+                        np.asarray(executed_state.ee_pose.position)
+                        - np.asarray(commanded_ee_pose.position)
+                    )
+                )
+            self.trajectory_recorder.append_executed(
+                step=self._sim_step_count,
+                timestamp_s=self.get_current_time_s(),
+                arms={"panda": executed_state},
+                feasibility=FeasibilityMetrics(tracking_error_m=tracking_error_m),
+                metadata={
+                    "controller": "JOINT_POSITION",
+                    "tracking_error_l2": float(np.linalg.norm(actual_joints - target)),
+                },
             )
 
             if self.viser_debug and self._sim_step_count % self._subsample_rate == 0:
@@ -494,14 +816,7 @@ class FrankaLiberoEnv(BaseEnv):
                     camera_name + "_segmentation_" + self.segmentation_level
                 ][::-1]
 
-        gripper_robot_base = (
-            vtf.SE3(wxyz_xyz=self.base_link_wxyz_xyz).inverse()
-            @ vtf.SE3(wxyz_xyz=self.gripper_link_wxyz_xyz)
-            @ vtf.SE3.from_rotation_and_translation(
-                rotation=vtf.SO3.from_rpy_radians(0.0, 0.0, np.pi / 2.0),
-                translation=np.array([0, 0, -0.107]),
-            )
-        )
+        ee_position, ee_wxyz = self._get_ee_pose_robot_base()
         obs["robot_joint_pos"] = np.concatenate(
             [
                 self._current_obs["robot0_joint_pos"],
@@ -510,11 +825,12 @@ class FrankaLiberoEnv(BaseEnv):
         )
         obs["robot_cartesian_pos"] = np.concatenate(
             [
-                gripper_robot_base.translation(),
-                gripper_robot_base.rotation().wxyz,
+                ee_position,
+                ee_wxyz,
                 [self._current_obs["robot0_gripper_qpos"][0] / self.gripper_metric_length],
             ]
         )
+        obs["trajectory"] = self.trajectory_summary()
         return obs
 
     def get_current_time_s(self) -> float:
@@ -610,6 +926,32 @@ class FrankaLiberoEnv(BaseEnv):
         )
         return frame[::-1]
 
+    def _close_viser(self) -> None:
+        renderer, self.trajectory_renderer = self.trajectory_renderer, None
+        if renderer is not None:
+            with suppress(Exception):
+                renderer.close()
+
+        server, self.viser_server = self.viser_server, None
+        if server is not None:
+            stop = getattr(server, "stop", None)
+            if callable(stop):
+                with suppress(Exception):
+                    stop()
+
+    def close(self) -> None:
+        """Release the Viser server and the underlying LIBERO environment."""
+        if self._closed:
+            return
+        self._closed = True
+        self._close_viser()
+        close_env = getattr(getattr(self, "handle", None), "env", None)
+        close = getattr(close_env, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+        super().close()
+
     # Viser debugging — lightweight robot-only update (no camera render)
     def _update_viser_robot_only(self) -> None:
         """Update only the URDF visualization — fast, no observation render."""
@@ -622,14 +964,13 @@ class FrankaLiberoEnv(BaseEnv):
         gripper_val = self._gripper_fraction * self.gripper_metric_length
         action_joint_copy = np.append(joints, gripper_val)
         self.urdf_vis.update_cfg(action_joint_copy)
+        self._update_trajectory_renderer()
 
     # Viser debugging — full update with camera render and pointcloud
     def _update_viser_server(self) -> None:
         obs = self.get_observation()
         if self.viser_debug:
             self._viser_init_check()
-
-            obs_cartesian = obs["robot_cartesian_pos"][:-1]
 
             action_joint_copy = obs["robot_joint_pos"].copy()
             action_joint_copy[-1] *= self.gripper_metric_length
@@ -715,6 +1056,8 @@ class FrankaLiberoEnv(BaseEnv):
                     axes_length=0.05,
                     axes_radius=0.0015,
                 )
+
+            self._update_trajectory_renderer()
 
     def update_viser_image(self, frame: np.ndarray) -> None:
         if self.viser_server is None:

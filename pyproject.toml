@@ -39,7 +39,7 @@ dependencies = [
   "pyroki @ git+https://github.com/chungmin99/pyroki.git",
   "robot_descriptions>=1.16.0",
   "yourdfpy>=0.0.56",
-  "viser>=0.2.0",
+  "viser>=1.0,<2.0",
   "trimesh>=4.4.0",
   "imageio[ffmpeg]>=0.6.0",
   "sam3",

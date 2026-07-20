@@ -300,6 +300,8 @@ export function useTrialState(): UseTrialStateReturn {
                 stderr: event.stderr,
                 reward: event.reward,
                 taskCompleted: event.task_completed,
+                planSuccess: event.plan_success,
+                trajectory: event.trajectory,
               };
             }
             return { ...prev, messages };
@@ -340,6 +342,9 @@ export function useTrialState(): UseTrialStateReturn {
             success: event.success,
             reward: event.total_reward,
             taskCompleted: event.task_completed,
+            planSuccess: event.plan_success,
+            agentFinished: event.agent_finished,
+            trajectory: event.trajectory,
             summary: event.summary,
           });
           break;
