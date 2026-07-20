@@ -195,6 +195,7 @@ uv run --no-sync --active capx/envs/launch.py \
 | [Development](docs/development.md) | Testing, linting, LIBERO/GraspNet setup, checkpoints, known issues |
 | [Real-World Franka Panda Bringup](docs/real-franka.md) | Bringup with robots_realtime, real-robot QuickStart |
 | [RL Training](docs/rl-training.md) | CaP-RL with GRPO/VeRL, sim-to-real transfer |
+| [PhysicalAgent Comparison and Leakage Audit](docs/physicalagent-comparison.md) | Direct-policy pipeline, oracle primitives, privilege boundaries, and clean evaluation requirements |
 | [Skill Library Compilation](scripts/skill_library_compilation/README.md) | Analyze eval outputs, compile reusable skill libraries |
 
 ---
